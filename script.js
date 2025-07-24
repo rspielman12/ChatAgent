@@ -39,15 +39,10 @@ function resetConversation() {
 function appendMessage(text, sender = 'bot') {
   const div = document.createElement('div');
   div.className = `message ${sender}`;
-  div.innerHTML = sanitize(text);
+  const html = marked.parse(text);
+  div.innerHTML = DOMPurify.sanitize(html);
   chatHistory.appendChild(div);
   chatHistory.scrollTop = chatHistory.scrollHeight;
-}
-
-function sanitize(str) {
-  const temp = document.createElement('div');
-  temp.textContent = str;
-  return temp.innerHTML;
 }
 
 function showTyping() {
@@ -130,9 +125,9 @@ chatForm.addEventListener('submit', async (e) => {
 
         if (answerEvent.data.sources && answerEvent.data.sources.length > 0) {
           const links = answerEvent.data.sources
-            .map(src => `<div><a href="${src.url}" target="_blank">${src.title}</a></div>`)
-            .join('');
-          message += `<div class="sources"><strong>Sources:</strong>${links}</div>`;
+            .map(src => `- [${src.title}](${src.url})`)
+            .join('\n');
+          message += `\n\n**Sources:**\n${links}`;
         }
 
         appendMessage(message, 'bot');
