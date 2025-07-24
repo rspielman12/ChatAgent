@@ -103,7 +103,19 @@ chatForm.addEventListener('submit', async (e) => {
       return;
     }
 
-    appendMessage(data.answer || '[No response]', 'bot');
+    // Handle array or object response
+    if (Array.isArray(data)) {
+      const answerEvent = data.find(event => event.event === 'answer');
+      if (answerEvent && answerEvent.data && answerEvent.data.answer) {
+        appendMessage(answerEvent.data.answer, 'bot');
+      } else {
+        appendMessage('[No usable answer in response]', 'bot');
+      }
+    } else if (data.answer) {
+      appendMessage(data.answer, 'bot');
+    } else {
+      appendMessage('[No response]', 'bot');
+    }
   } catch (err) {
     console.error('Fetch error:', err);
     appendMessage('[Error contacting chat server]', 'bot');
