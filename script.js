@@ -3,10 +3,13 @@ const botId = 'wxepOdO8DrIY3Hgszjip';
 const chatEndpoint = `https://api.docsbot.ai/teams/${teamId}/bots/${botId}/chat-agent`;
 
 let conversationId = getOrCreateConversationId();
+let chatTranscript = [];
 const chatHistory = document.getElementById('chat-history');
 const chatForm = document.getElementById('chat-form');
 const chatInput = document.getElementById('chat-input');
 const newChatBtn = document.getElementById('new-chat-btn');
+const exportBtn = document.getElementById('export-btn');
+const productSelect = document.getElementById('product-select');
 const imageInput = document.getElementById('image-input');
 const imagePreview = document.getElementById('image-preview');
 const attachBtn = document.getElementById('attach-btn');
@@ -34,6 +37,7 @@ function resetConversation() {
   localStorage.removeItem('conversationTimestamp');
   conversationId = getOrCreateConversationId();
   chatHistory.innerHTML = '';
+  chatTranscript = [];
 }
 
 function appendMessage(text, sender = 'bot') {
@@ -43,6 +47,8 @@ function appendMessage(text, sender = 'bot') {
   div.innerHTML = DOMPurify.sanitize(html);
   chatHistory.appendChild(div);
   chatHistory.scrollTop = chatHistory.scrollHeight;
+
+  chatTranscript.push({ sender, text });
 }
 
 function showTyping() {
@@ -62,11 +68,14 @@ function removeTyping() {
 chatForm.addEventListener('submit', async (e) => {
   e.preventDefault();
   const message = chatInput.value.trim();
+  const product = productSelect.value;
   if (!message && selectedImageURLs.length === 0) return;
 
+  const fullMessage = `[Product: ${product}] ${message}`;
   appendMessage(message, 'user');
-  selectedImageURLs.forEach(url => appendMessage(`<img src="${url}" />`, 'user'));
+  chatTranscript.push({ sender: 'user', text: fullMessage });
 
+  selectedImageURLs.forEach(url => appendMessage(`<img src="${url}" />`, 'user'));
   chatInput.value = '';
   imagePreview.innerHTML = '';
   const image_urls = selectedImageURLs.slice();
@@ -74,7 +83,7 @@ chatForm.addEventListener('submit', async (e) => {
 
   const body = {
     conversationId,
-    question: message,
+    question: fullMessage,
     metadata: {
       name: 'John Doe',
       email: 'john@example.com',
@@ -83,67 +92,64 @@ chatForm.addEventListener('submit', async (e) => {
     document_retriever: true,
     followup_rating: true,
     full_source: true,
-    stream: false,
+    stream: true,
     image_urls
   };
 
   showTyping();
 
-  try {
-    const response = await fetch(chatEndpoint, {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify(body)
-    });
+  const eventSource = new EventSourcePolyfill(chatEndpoint, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    payload: JSON.stringify(body)
+  });
 
-    const rawText = await response.text();
-    console.log('Raw response from server:', rawText);
-    removeTyping();
+  let answer = '';
+  let streamingDiv = null;
 
-    if (!response.ok) {
-      handleErrors(response.status);
-      appendMessage('[Server error]', 'bot');
+  eventSource.onmessage = (event) => {
+    if (event.data === '[DONE]') {
+      removeTyping();
+      eventSource.close();
       return;
     }
 
-    let data;
-    try {
-      data = JSON.parse(rawText);
-    } catch (err) {
-      console.error('Failed to parse JSON:', err);
-      appendMessage('[Invalid response from server]', 'bot');
-      return;
-    }
+    const parsed = JSON.parse(event.data);
+    const eventType = parsed.event;
+    const data = parsed.data;
 
-    if (Array.isArray(data)) {
-      const answerEvent = data.find(event =>
-        event.event === 'answer' || event.event === 'lookup_answer'
-      );
+    if ((eventType === 'answer' || eventType === 'lookup_answer') && data.answer) {
+      answer += data.answer;
 
-      if (answerEvent && answerEvent.data && answerEvent.data.answer) {
-        let message = answerEvent.data.answer;
-
-        if (answerEvent.data.sources && answerEvent.data.sources.length > 0) {
-          const links = answerEvent.data.sources
-            .map(src => `- [${src.title}](${src.url})`)
-            .join('\n');
-          message += `\n\n**Sources:**\n${links}`;
-        }
-
-        appendMessage(message, 'bot');
-      } else {
-        appendMessage('[No usable answer in response]', 'bot');
+      if (!streamingDiv) {
+        streamingDiv = document.createElement('div');
+        streamingDiv.className = 'message bot';
+        streamingDiv.id = 'streaming';
+        chatHistory.appendChild(streamingDiv);
       }
-    } else if (data.answer) {
-      appendMessage(data.answer, 'bot');
-    } else {
-      appendMessage('[No response]', 'bot');
+
+      let fullText = data.answer;
+
+      if (data.sources && data.sources.length > 0) {
+        const links = data.sources.map(src => `- [${src.title}](${src.url})`).join('\n');
+        fullText += `\n\n**Sources:**\n${links}`;
+      }
+
+      streamingDiv.innerHTML = DOMPurify.sanitize(marked.parse(answer));
+      chatHistory.scrollTop = chatHistory.scrollHeight;
     }
-  } catch (err) {
+  };
+
+  eventSource.onerror = (err) => {
     removeTyping();
-    console.error('Fetch error:', err);
-    appendMessage('[Error contacting chat server]', 'bot');
-  }
+    appendMessage('[Error streaming response]', 'bot');
+    eventSource.close();
+  };
+
+  eventSource.addEventListener('done', () => {
+    removeTyping();
+    chatTranscript.push({ sender: 'bot', text: answer });
+  });
 });
 
 function handleErrors(status) {
@@ -160,6 +166,17 @@ function handleErrors(status) {
 }
 
 newChatBtn.addEventListener('click', resetConversation);
+
+exportBtn.addEventListener('click', () => {
+  const blob = new Blob([JSON.stringify(chatTranscript, null, 2)], { type: 'application/json' });
+  const link = document.createElement('a');
+  link.href = URL.createObjectURL(blob);
+  link.download = 'chat-transcript.json';
+  document.body.appendChild(link);
+  link.click();
+  document.body.removeChild(link);
+});
+
 attachBtn.addEventListener('click', () => imageInput.click());
 
 imageInput.addEventListener('change', async (e) => {
