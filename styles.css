@@ -83,3 +83,15 @@ form button {
   margin-top: 4px;
   border: 1px solid #ccc;
 }
+
+.sources {
+  margin-top: 8px;
+  font-size: 0.9em;
+}
+.sources a {
+  color: #0078d4;
+  text-decoration: none;
+}
+.sources a:hover {
+  text-decoration: underline;
+}

@@ -50,6 +50,20 @@ function sanitize(str) {
   return temp.innerHTML;
 }
 
+function showTyping() {
+  const typing = document.createElement('div');
+  typing.className = 'typing';
+  typing.id = 'typing';
+  typing.textContent = 'Agent is typing...';
+  chatHistory.appendChild(typing);
+  chatHistory.scrollTop = chatHistory.scrollHeight;
+}
+
+function removeTyping() {
+  const typing = document.getElementById('typing');
+  if (typing) typing.remove();
+}
+
 chatForm.addEventListener('submit', async (e) => {
   e.preventDefault();
   const message = chatInput.value.trim();
@@ -78,6 +92,8 @@ chatForm.addEventListener('submit', async (e) => {
     image_urls
   };
 
+  showTyping();
+
   try {
     const response = await fetch(chatEndpoint, {
       method: 'POST',
@@ -87,6 +103,7 @@ chatForm.addEventListener('submit', async (e) => {
 
     const rawText = await response.text();
     console.log('Raw response from server:', rawText);
+    removeTyping();
 
     if (!response.ok) {
       handleErrors(response.status);
@@ -103,11 +120,22 @@ chatForm.addEventListener('submit', async (e) => {
       return;
     }
 
-    // Handle array or object response
     if (Array.isArray(data)) {
-      const answerEvent = data.find(event => event.event === 'answer');
+      const answerEvent = data.find(event =>
+        event.event === 'answer' || event.event === 'lookup_answer'
+      );
+
       if (answerEvent && answerEvent.data && answerEvent.data.answer) {
-        appendMessage(answerEvent.data.answer, 'bot');
+        let message = answerEvent.data.answer;
+
+        if (answerEvent.data.sources && answerEvent.data.sources.length > 0) {
+          const links = answerEvent.data.sources
+            .map(src => `<div><a href="${src.url}" target="_blank">${src.title}</a></div>`)
+            .join('');
+          message += `<div class="sources"><strong>Sources:</strong>${links}</div>`;
+        }
+
+        appendMessage(message, 'bot');
       } else {
         appendMessage('[No usable answer in response]', 'bot');
       }
@@ -117,6 +145,7 @@ chatForm.addEventListener('submit', async (e) => {
       appendMessage('[No response]', 'bot');
     }
   } catch (err) {
+    removeTyping();
     console.error('Fetch error:', err);
     appendMessage('[Error contacting chat server]', 'bot');
   }
