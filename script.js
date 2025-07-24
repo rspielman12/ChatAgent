@@ -50,20 +50,6 @@ function sanitize(str) {
   return temp.innerHTML;
 }
 
-function showTyping() {
-  const div = document.createElement('div');
-  div.className = 'typing';
-  div.textContent = 'Bot is typing...';
-  div.id = 'typing';
-  chatHistory.appendChild(div);
-  chatHistory.scrollTop = chatHistory.scrollHeight;
-}
-
-function removeTyping() {
-  const typing = document.getElementById('typing');
-  if (typing) typing.remove();
-}
-
 chatForm.addEventListener('submit', async (e) => {
   e.preventDefault();
   const message = chatInput.value.trim();
@@ -76,8 +62,6 @@ chatForm.addEventListener('submit', async (e) => {
   imagePreview.innerHTML = '';
   const image_urls = selectedImageURLs.slice();
   selectedImageURLs = [];
-
-  showTyping();
 
   const body = {
     conversationId,
@@ -101,18 +85,27 @@ chatForm.addEventListener('submit', async (e) => {
       body: JSON.stringify(body)
     });
 
+    const rawText = await response.text();
+    console.log('Raw response from server:', rawText);
+
     if (!response.ok) {
       handleErrors(response.status);
-      removeTyping();
+      appendMessage('[Server error]', 'bot');
       return;
     }
 
-    const data = await response.json();
-    removeTyping();
+    let data;
+    try {
+      data = JSON.parse(rawText);
+    } catch (err) {
+      console.error('Failed to parse JSON:', err);
+      appendMessage('[Invalid response from server]', 'bot');
+      return;
+    }
+
     appendMessage(data.answer || '[No response]', 'bot');
   } catch (err) {
     console.error('Fetch error:', err);
-    removeTyping();
     appendMessage('[Error contacting chat server]', 'bot');
   }
 });
