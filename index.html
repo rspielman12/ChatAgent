@@ -1,0 +1,29 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <title>Chat Agent</title>
+  <meta name="viewport" content="width=device-width, initial-scale=1.0"/>
+  <link rel="stylesheet" href="styles.css" />
+</head>
+<body>
+  <div class="chat-container">
+    <header>
+      <h2>Chat Agent</h2>
+      <button id="new-chat-btn">New Conversation</button>
+    </header>
+
+    <div id="chat-history" class="chat-history"></div>
+
+    <form id="chat-form" autocomplete="off">
+      <input type="text" id="chat-input" placeholder="Type a message..." required />
+      <input type="file" id="image-input" accept="image/*" multiple hidden />
+      <button type="button" id="attach-btn">📎</button>
+      <button type="submit">Send</button>
+    </form>
+    <div id="image-preview" class="image-preview"></div>
+  </div>
+
+  <script src="script.js"></script>
+</body>
+</html>
