@@ -1,16 +1,12 @@
-
 const teamId = 'my4YXyYm6SQ5ewtD75RN';
 const botId = 'wxepOdO8DrIY3Hgszjip';
 const chatEndpoint = `https://api.docsbot.ai/teams/${teamId}/bots/${botId}/chat-agent`;
 
 let conversationId = getOrCreateConversationId();
-let chatTranscript = [];
 const chatHistory = document.getElementById('chat-history');
 const chatForm = document.getElementById('chat-form');
 const chatInput = document.getElementById('chat-input');
 const newChatBtn = document.getElementById('new-chat-btn');
-const exportBtn = document.getElementById('export-btn');
-const productSelect = document.getElementById('product-select');
 const imageInput = document.getElementById('image-input');
 const imagePreview = document.getElementById('image-preview');
 const attachBtn = document.getElementById('attach-btn');
@@ -38,7 +34,6 @@ function resetConversation() {
   localStorage.removeItem('conversationTimestamp');
   conversationId = getOrCreateConversationId();
   chatHistory.innerHTML = '';
-  chatTranscript = [];
 }
 
 function appendMessage(text, sender = 'bot') {
@@ -48,8 +43,6 @@ function appendMessage(text, sender = 'bot') {
   div.innerHTML = DOMPurify.sanitize(html);
   chatHistory.appendChild(div);
   chatHistory.scrollTop = chatHistory.scrollHeight;
-
-  chatTranscript.push({ sender, text });
 }
 
 function showTyping() {
@@ -66,96 +59,14 @@ function removeTyping() {
   if (typing) typing.remove();
 }
 
-async function streamChat(body) {
-  const response = await fetch(chatEndpoint, {
-    method: 'POST',
-    headers: { 'Content-Type': 'application/json' },
-    body: JSON.stringify(body)
-  });
-
-  if (!response.ok) {
-    throw new Error('Streaming request failed with status ' + response.status);
-  }
-
-  const reader = response.body.getReader();
-  const decoder = new TextDecoder('utf-8');
-  let buffer = '';
-  let answer = '';
-  let streamingDiv = null;
-
-  while (true) {
-    const { value, done } = await reader.read();
-    if (done) break;
-
-    buffer += decoder.decode(value, { stream: true });
-    const parts = buffer.split(/\n\n/);
-
-    for (let part of parts) {
-      if (!part.includes('data:')) continue;
-
-      const lines = part.trim().split('\n');
-      let eventType = 'message';
-      let jsonData = null;
-
-      for (let line of lines) {
-        if (line.startsWith('event:')) {
-          eventType = line.replace('event:', '').trim();
-        } else if (line.startsWith('data:')) {
-          const jsonText = line.replace('data:', '').trim();
-          try {
-            jsonData = JSON.parse(jsonText);
-          } catch (err) {
-            console.warn('Failed to parse JSON chunk', err);
-          }
-        }
-      }
-
-      if (jsonData?.answer) {
-        answer += jsonData.answer;
-
-        
-        if (!streamingDiv) {
-          streamingDiv = document.createElement('div');
-          streamingDiv.className = 'message bot';
-          chatHistory.appendChild(streamingDiv);
-          streamingDiv.textContent = token + ' ';
-        } else {
-          streamingDiv.textContent += token + ' ';
-        }
-        streamingDiv.innerHTML = DOMPurify.sanitize(marked.parse(streamingDiv.textContent));
-
-          streamingDiv = document.createElement('div');
-          streamingDiv.className = 'message bot';
-          chatHistory.appendChild(streamingDiv);
-        }
-
-        // already handled above with progressive rendering
-        chatHistory.scrollTop = chatHistory.scrollHeight;
-      }
-
-      if (eventType === 'lookup_answer' || eventType === 'answer') {
-        removeTyping();
-        chatTranscript.push({ sender: 'bot', text: answer });
-      }
-    }
-
-    buffer = '';
-  }
-
-  removeTyping();
-}
-
 chatForm.addEventListener('submit', async (e) => {
   e.preventDefault();
   const message = chatInput.value.trim();
-  const product = productSelect.value;
   if (!message && selectedImageURLs.length === 0) return;
 
-  const fullMessage = `[Product: ${product}] ${message}`;
   appendMessage(message, 'user');
-  chatTranscript.push({ sender: 'user', text: fullMessage });
-
   selectedImageURLs.forEach(url => appendMessage(`<img src="${url}" />`, 'user'));
+
   chatInput.value = '';
   imagePreview.innerHTML = '';
   const image_urls = selectedImageURLs.slice();
@@ -163,7 +74,7 @@ chatForm.addEventListener('submit', async (e) => {
 
   const body = {
     conversationId,
-    question: fullMessage,
+    question: message,
     metadata: {
       name: 'John Doe',
       email: 'john@example.com',
@@ -172,32 +83,83 @@ chatForm.addEventListener('submit', async (e) => {
     document_retriever: true,
     followup_rating: true,
     full_source: true,
-    stream: true,
+    stream: false,
     image_urls
   };
 
+  showTyping();
+
   try {
-    showTyping();
-    await streamChat(body);
-  } catch (err) {
-    console.error('Stream error:', err);
-    appendMessage('[Error streaming response]', 'bot');
+    const response = await fetch(chatEndpoint, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify(body)
+    });
+
+    const rawText = await response.text();
+    console.log('Raw response from server:', rawText);
     removeTyping();
+
+    if (!response.ok) {
+      handleErrors(response.status);
+      appendMessage('[Server error]', 'bot');
+      return;
+    }
+
+    let data;
+    try {
+      data = JSON.parse(rawText);
+    } catch (err) {
+      console.error('Failed to parse JSON:', err);
+      appendMessage('[Invalid response from server]', 'bot');
+      return;
+    }
+
+    if (Array.isArray(data)) {
+      const answerEvent = data.find(event =>
+        event.event === 'answer' || event.event === 'lookup_answer'
+      );
+
+      if (answerEvent && answerEvent.data && answerEvent.data.answer) {
+        let message = answerEvent.data.answer;
+
+        if (answerEvent.data.sources && answerEvent.data.sources.length > 0) {
+          const links = answerEvent.data.sources
+            .map(src => `- [${src.title}](${src.url})`)
+            .join('\n');
+          message += `\n\n**Sources:**\n${links}`;
+        }
+
+        appendMessage(message, 'bot');
+      } else {
+        appendMessage('[No usable answer in response]', 'bot');
+      }
+    } else if (data.answer) {
+      appendMessage(data.answer, 'bot');
+    } else {
+      appendMessage('[No response]', 'bot');
+    }
+  } catch (err) {
+    removeTyping();
+    console.error('Fetch error:', err);
+    appendMessage('[Error contacting chat server]', 'bot');
   }
 });
 
+function handleErrors(status) {
+  const messages = {
+    400: 'Invalid input.',
+    403: 'Authentication failed.',
+    404: 'Bot not found.',
+    409: 'Bot not ready.',
+    413: 'Message too large.',
+    429: 'Rate limit exceeded. Please wait.',
+    500: 'Server error. Please try again.'
+  };
+  appendMessage(messages[status] || 'Unknown error.', 'bot');
+}
+
 newChatBtn.addEventListener('click', resetConversation);
-
-exportBtn.addEventListener('click', () => {
-  const blob = new Blob([JSON.stringify(chatTranscript, null, 2)], { type: 'application/json' });
-  const link = document.createElement('a');
-  link.href = URL.createObjectURL(blob);
-  link.download = 'chat-transcript.json';
-  document.body.appendChild(link);
-  link.click();
-  document.body.removeChild(link);
-});
-
 attachBtn.addEventListener('click', () => imageInput.click());
 
 imageInput.addEventListener('change', async (e) => {
