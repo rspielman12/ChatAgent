@@ -1,7 +1,51 @@
 
+document.addEventListener("DOMContentLoaded", function () {
+  document.getElementById("chat-form").addEventListener("submit", async function(e) {
+    e.preventDefault();
+
+    const input = document.getElementById("user-input");
+    const question = input.value.trim();
+    if (!question) return;
+
+    const product = document.getElementById("product-select").value;
+    const conversationId = getConversationId();
+    const metadata = getUserMetadata();
+
+    appendUserMessage(question);
+    input.value = "";
+
+    await streamChat(question, conversationId, metadata, product);
+  });
+
+  function getConversationId() {
+    let id = sessionStorage.getItem("conversationId");
+    if (!id) {
+      id = crypto.randomUUID();
+      sessionStorage.setItem("conversationId", id);
+    }
+    return id;
+  }
+
+  function getUserMetadata() {
+    return {
+      name: "Web User",
+      email: "",
+      referrer: document.referrer || window.location.href
+    };
+  }
+
+  function appendUserMessage(message) {
+    const chatHistory = document.getElementById("chat-history");
+    const userDiv = document.createElement("div");
+    userDiv.className = "message user";
+    userDiv.innerText = message;
+    chatHistory.appendChild(userDiv);
+    chatHistory.scrollTop = chatHistory.scrollHeight;
+  }
+});
+
 async function streamChat(question, conversationId, metadata, product) {
   const chatHistory = document.getElementById("chat-history");
-  const form = document.getElementById("chat-form");
   const typingDiv = document.createElement("div");
   typingDiv.className = "typing";
   typingDiv.innerText = "Agent is typing...";
@@ -74,7 +118,6 @@ async function streamChat(question, conversationId, metadata, product) {
           const jsonData = JSON.parse(line.replace("data:", "").trim());
 
           if (jsonData?.answer) {
-            // already rendered above during stream
             typingDiv.remove();
             if (streamingDiv) {
               chatTranscript.push({ sender: 'bot', text: streamingDiv.textContent });
