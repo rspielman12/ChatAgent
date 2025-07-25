@@ -1,132 +1,234 @@
 
-document.addEventListener("DOMContentLoaded", function () {
-  document.getElementById("chat-form").addEventListener("submit", async function(e) {
-    e.preventDefault();
+const teamId = 'my4YXyYm6SQ5ewtD75RN';
+const botId = 'wxepOdO8DrIY3Hgszjip';
+const chatEndpoint = `https://api.docsbot.ai/teams/${teamId}/bots/${botId}/chat-agent`;
 
-    const input = document.getElementById("user-input");
-    const question = input.value.trim();
-    if (!question) return;
+let conversationId = getOrCreateConversationId();
+let chatTranscript = [];
+const chatHistory = document.getElementById('chat-history');
+const chatForm = document.getElementById('chat-form');
+const chatInput = document.getElementById('chat-input');
+const newChatBtn = document.getElementById('new-chat-btn');
+const exportBtn = document.getElementById('export-btn');
+const productSelect = document.getElementById('product-select');
+const imageInput = document.getElementById('image-input');
+const imagePreview = document.getElementById('image-preview');
+const attachBtn = document.getElementById('attach-btn');
 
-    const product = document.getElementById("product-select").value;
-    const conversationId = getConversationId();
-    const metadata = getUserMetadata();
+let selectedImageURLs = [];
 
-    appendUserMessage(question);
-    input.value = "";
+function getOrCreateConversationId() {
+  const stored = localStorage.getItem('conversationId');
+  const timestamp = localStorage.getItem('conversationTimestamp');
+  const now = Date.now();
+  const twelveHours = 12 * 60 * 60 * 1000;
 
-    await streamChat(question, conversationId, metadata, product);
-  });
-
-  function getConversationId() {
-    let id = sessionStorage.getItem("conversationId");
-    if (!id) {
-      id = crypto.randomUUID();
-      sessionStorage.setItem("conversationId", id);
-    }
-    return id;
+  if (!stored || !timestamp || now - timestamp > twelveHours) {
+    const newId = crypto.randomUUID();
+    localStorage.setItem('conversationId', newId);
+    localStorage.setItem('conversationTimestamp', now);
+    return newId;
   }
 
-  function getUserMetadata() {
-    return {
-      name: "Web User",
-      email: "",
-      referrer: document.referrer || window.location.href
-    };
-  }
+  return stored;
+}
 
-  function appendUserMessage(message) {
-    const chatHistory = document.getElementById("chat-history");
-    const userDiv = document.createElement("div");
-    userDiv.className = "message user";
-    userDiv.innerText = message;
-    chatHistory.appendChild(userDiv);
-    chatHistory.scrollTop = chatHistory.scrollHeight;
-  }
-});
+function resetConversation() {
+  localStorage.removeItem('conversationId');
+  localStorage.removeItem('conversationTimestamp');
+  conversationId = getOrCreateConversationId();
+  chatHistory.innerHTML = '';
+  chatTranscript = [];
+}
 
-async function streamChat(question, conversationId, metadata, product) {
-  const chatHistory = document.getElementById("chat-history");
-  const typingDiv = document.createElement("div");
-  typingDiv.className = "typing";
-  typingDiv.innerText = "Agent is typing...";
-  chatHistory.appendChild(typingDiv);
+function appendMessage(text, sender = 'bot') {
+  const div = document.createElement('div');
+  div.className = `message ${sender}`;
+  const html = marked.parse(text);
+  div.innerHTML = DOMPurify.sanitize(html);
+  chatHistory.appendChild(div);
   chatHistory.scrollTop = chatHistory.scrollHeight;
 
-  const payload = {
-    question: `${product}: ${question}`,
-    conversationId,
-    metadata,
-    context_items: 5,
-    human_escalation: false,
-    followup_rating: true,
-    document_retriever: true,
-    full_source: true,
-    stream: true
-  };
+  chatTranscript.push({ sender, text });
+}
 
-  const response = await fetch(`https://api.docsbot.ai/teams/my4YXyYm6SQ5ewtD75RN/bots/wxepOdO8DrIY3Hgszjip/chat-agent`, {
-    method: "POST",
-    headers: { "Content-Type": "application/json" },
-    body: JSON.stringify(payload)
+function showTyping() {
+  const typing = document.createElement('div');
+  typing.className = 'typing';
+  typing.id = 'typing';
+  typing.textContent = 'Agent is typing...';
+  chatHistory.appendChild(typing);
+  chatHistory.scrollTop = chatHistory.scrollHeight;
+}
+
+function removeTyping() {
+  const typing = document.getElementById('typing');
+  if (typing) typing.remove();
+}
+
+async function streamChat(body) {
+  const response = await fetch(chatEndpoint, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify(body)
   });
 
   if (!response.ok) {
-    typingDiv.remove();
-    const errorDiv = document.createElement("div");
-    errorDiv.className = "message bot";
-    errorDiv.innerText = "Error streaming response.";
-    chatHistory.appendChild(errorDiv);
-    return;
+    throw new Error('Streaming request failed with status ' + response.status);
   }
 
   const reader = response.body.getReader();
-  const decoder = new TextDecoder("utf-8");
-
-  let answer = "";
+  const decoder = new TextDecoder('utf-8');
+  let buffer = '';
+  let answer = '';
   let streamingDiv = null;
 
   while (true) {
     const { value, done } = await reader.read();
     if (done) break;
-    const chunk = decoder.decode(value, { stream: true });
-    const lines = chunk.split("\n");
 
-    for (let line of lines) {
-      if (line.startsWith("event:")) {
-        var eventType = line.replace("event:", "").trim();
+    buffer += decoder.decode(value, { stream: true });
+    const parts = buffer.split(/\n\n/);
+
+    for (let part of parts) {
+      if (!part.includes('data:')) continue;
+
+      const lines = part.trim().split('\n');
+      let eventType = 'message';
+      let jsonData = null;
+
+      for (let line of lines) {
+        if (line.startsWith('event:')) {
+          eventType = line.replace('event:', '').trim();
+        } else if (line.startsWith('data:')) {
+          const jsonText = line.replace('data:', '').trim();
+          try {
+            jsonData = JSON.parse(jsonText);
+          } catch (err) {
+            console.warn('Failed to parse JSON chunk', err);
+          }
+        }
       }
 
-      if (eventType === "stream" && line.startsWith("data:")) {
-        const token = line.replace("data:", "").trim();
-        answer += token;
+      if (jsonData?.answer) {
+        answer += jsonData.answer;
 
+        
         if (!streamingDiv) {
-          streamingDiv = document.createElement("div");
-          streamingDiv.className = "message bot";
+          streamingDiv = document.createElement('div');
+          streamingDiv.className = 'message bot';
           chatHistory.appendChild(streamingDiv);
-          streamingDiv.textContent = token + " ";
+          streamingDiv.textContent = token + ' ';
         } else {
-          streamingDiv.textContent += token + " ";
+          streamingDiv.textContent += token + ' ';
+        }
+        streamingDiv.innerHTML = DOMPurify.sanitize(marked.parse(streamingDiv.textContent));
+
+          streamingDiv = document.createElement('div');
+          streamingDiv.className = 'message bot';
+          chatHistory.appendChild(streamingDiv);
         }
 
-        streamingDiv.innerHTML = DOMPurify.sanitize(marked.parse(streamingDiv.textContent));
+        // already handled above with progressive rendering
         chatHistory.scrollTop = chatHistory.scrollHeight;
       }
 
-      if (line.startsWith("data:") && eventType !== "stream") {
-        try {
-          const jsonData = JSON.parse(line.replace("data:", "").trim());
-
-          if (jsonData?.answer) {
-            typingDiv.remove();
-            if (streamingDiv) {
-              chatTranscript.push({ sender: 'bot', text: streamingDiv.textContent });
-            }
-          }
-        } catch (err) {
-          console.warn("Failed to parse JSON chunk", err);
-        }
+      if (eventType === 'lookup_answer' || eventType === 'answer') {
+        removeTyping();
+        chatTranscript.push({ sender: 'bot', text: answer });
       }
     }
+
+    buffer = '';
   }
+
+  removeTyping();
 }
+
+chatForm.addEventListener('submit', async (e) => {
+  e.preventDefault();
+  const message = chatInput.value.trim();
+  const product = productSelect.value;
+  if (!message && selectedImageURLs.length === 0) return;
+
+  const fullMessage = `[Product: ${product}] ${message}`;
+  appendMessage(message, 'user');
+  chatTranscript.push({ sender: 'user', text: fullMessage });
+
+  selectedImageURLs.forEach(url => appendMessage(`<img src="${url}" />`, 'user'));
+  chatInput.value = '';
+  imagePreview.innerHTML = '';
+  const image_urls = selectedImageURLs.slice();
+  selectedImageURLs = [];
+
+  const body = {
+    conversationId,
+    question: fullMessage,
+    metadata: {
+      name: 'John Doe',
+      email: 'john@example.com',
+      referrer: document.referrer
+    },
+    document_retriever: true,
+    followup_rating: true,
+    full_source: true,
+    stream: true,
+    image_urls
+  };
+
+  try {
+    showTyping();
+    await streamChat(body);
+  } catch (err) {
+    console.error('Stream error:', err);
+    appendMessage('[Error streaming response]', 'bot');
+    removeTyping();
+  }
+});
+
+newChatBtn.addEventListener('click', resetConversation);
+
+exportBtn.addEventListener('click', () => {
+  const blob = new Blob([JSON.stringify(chatTranscript, null, 2)], { type: 'application/json' });
+  const link = document.createElement('a');
+  link.href = URL.createObjectURL(blob);
+  link.download = 'chat-transcript.json';
+  document.body.appendChild(link);
+  link.click();
+  document.body.removeChild(link);
+});
+
+attachBtn.addEventListener('click', () => imageInput.click());
+
+imageInput.addEventListener('change', async (e) => {
+  const files = Array.from(e.target.files);
+  for (let file of files) {
+    const url = await uploadImage(file);
+    selectedImageURLs.push(url);
+    renderImagePreview(url);
+  }
+  e.target.value = '';
+});
+
+function renderImagePreview(url) {
+  const img = document.createElement('img');
+  img.src = url;
+  imagePreview.appendChild(img);
+}
+
+async function uploadImage(file) {
+  return URL.createObjectURL(file);
+}
+
+chatForm.addEventListener('dragover', (e) => e.preventDefault());
+chatForm.addEventListener('drop', async (e) => {
+  e.preventDefault();
+  const files = Array.from(e.dataTransfer.files);
+  for (let file of files) {
+    if (file.type.startsWith('image/')) {
+      const url = await uploadImage(file);
+      selectedImageURLs.push(url);
+      renderImagePreview(url);
+    }
+  }
+});
