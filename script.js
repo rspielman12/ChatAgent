@@ -142,6 +142,10 @@ async function streamChat(body) {
       }
 
       if (eventType === 'lookup_answer' || eventType === 'answer') {
+  removeTyping();
+  chatTranscript.push({ sender: 'bot', text: answer });
+  // No re-append of final answer
+
         removeTyping();
         chatTranscript.push({ sender: 'bot', text: answer });
       }
