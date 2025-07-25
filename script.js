@@ -97,7 +97,23 @@ async function streamChat(body) {
       let eventType = 'message';
       let jsonData = null;
 
-      for (let line of lines) {
+      
+    for (let line of lines) {
+      if (eventType === 'stream' && line.startsWith('data:')) {
+        const token = line.replace('data:', '').trim();
+        answer += token;
+
+        if (!streamingDiv) {
+          streamingDiv = document.createElement('div');
+          streamingDiv.className = 'message bot';
+          chatHistory.appendChild(streamingDiv);
+        }
+
+        streamingDiv.innerHTML = DOMPurify.sanitize(marked.parse(answer));
+        chatHistory.scrollTop = chatHistory.scrollHeight;
+        continue;
+      }
+
         if (line.startsWith('event:')) {
           eventType = line.replace('event:', '').trim();
         } else if (line.startsWith('data:')) {
@@ -110,7 +126,9 @@ async function streamChat(body) {
         }
       }
 
-      if (jsonData?.answer) {
+      
+      if (eventType !== 'stream' && jsonData?.answer) {
+
         answer += jsonData.answer;
 
         if (!streamingDiv) {
