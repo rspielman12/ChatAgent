@@ -1,3 +1,4 @@
+
 const teamId = 'my4YXyYm6SQ5ewtD75RN';
 const botId = 'wxepOdO8DrIY3Hgszjip';
 const chatEndpoint = `https://api.docsbot.ai/teams/${teamId}/bots/${botId}/chat-agent`;
@@ -65,6 +66,75 @@ function removeTyping() {
   if (typing) typing.remove();
 }
 
+async function streamChat(body) {
+  const response = await fetch(chatEndpoint, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify(body)
+  });
+
+  if (!response.ok) {
+    throw new Error('Streaming request failed with status ' + response.status);
+  }
+
+  const reader = response.body.getReader();
+  const decoder = new TextDecoder('utf-8');
+  let buffer = '';
+  let answer = '';
+  let streamingDiv = null;
+
+  while (true) {
+    const { value, done } = await reader.read();
+    if (done) break;
+
+    buffer += decoder.decode(value, { stream: true });
+    const parts = buffer.split(/\n\n/);
+
+    for (let part of parts) {
+      if (!part.includes('data:')) continue;
+
+      const lines = part.trim().split('\n');
+      let eventType = 'message';
+      let jsonData = null;
+
+      for (let line of lines) {
+        if (line.startsWith('event:')) {
+          eventType = line.replace('event:', '').trim();
+        } else if (line.startsWith('data:')) {
+          const jsonText = line.replace('data:', '').trim();
+          try {
+            jsonData = JSON.parse(jsonText);
+          } catch (err) {
+            console.warn('Failed to parse JSON chunk', err);
+          }
+        }
+      }
+
+      if (jsonData?.answer) {
+        answer += jsonData.answer;
+
+        if (!streamingDiv) {
+          streamingDiv = document.createElement('div');
+          streamingDiv.className = 'message bot';
+          chatHistory.appendChild(streamingDiv);
+        }
+
+        streamingDiv.innerHTML = DOMPurify.sanitize(marked.parse(answer));
+        chatHistory.scrollTop = chatHistory.scrollHeight;
+      }
+
+      if (eventType === 'lookup_answer' || eventType === 'answer') {
+        removeTyping();
+        chatTranscript.push({ sender: 'bot', text: answer });
+      }
+    }
+
+    buffer = '';
+  }
+
+  removeTyping();
+}
+
 chatForm.addEventListener('submit', async (e) => {
   e.preventDefault();
   const message = chatInput.value.trim();
@@ -96,54 +166,14 @@ chatForm.addEventListener('submit', async (e) => {
     image_urls
   };
 
-  showTyping();
-
-  const eventSource = new EventSourcePolyfill(chatEndpoint, {
-    method: 'POST',
-    headers: { 'Content-Type': 'application/json' },
-    payload: JSON.stringify(body)
-  });
-
-  let answer = '';
-  let streamingDiv = null;
-
-  eventSource.onmessage = (event) => {
-    if (event.data === '[DONE]') {
-      removeTyping();
-      eventSource.close();
-      chatTranscript.push({ sender: 'bot', text: answer });
-      return;
-    }
-
-    try {
-      const parsed = JSON.parse(event.data);
-      const eventType = parsed.event;
-      const data = parsed.data;
-
-      if ((eventType === 'answer' || eventType === 'lookup_answer') && data.answer) {
-        answer += data.answer;
-
-        if (!streamingDiv) {
-          streamingDiv = document.createElement('div');
-          streamingDiv.className = 'message bot';
-          streamingDiv.id = 'streaming';
-          chatHistory.appendChild(streamingDiv);
-        }
-
-        streamingDiv.innerHTML = DOMPurify.sanitize(marked.parse(answer));
-        chatHistory.scrollTop = chatHistory.scrollHeight;
-      }
-    } catch (err) {
-      console.error('Streaming JSON parse error:', err);
-    }
-  };
-
-  eventSource.onerror = (err) => {
-    removeTyping();
+  try {
+    showTyping();
+    await streamChat(body);
+  } catch (err) {
     console.error('Stream error:', err);
     appendMessage('[Error streaming response]', 'bot');
-    eventSource.close();
-  };
+    removeTyping();
+  }
 });
 
 newChatBtn.addEventListener('click', resetConversation);
