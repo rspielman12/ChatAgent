@@ -1,196 +1,363 @@
-const teamId = 'my4YXyYm6SQ5ewtD75RN';
-const botId = 'wxepOdO8DrIY3Hgszjip';
-const chatEndpoint = `https://api.docsbot.ai/teams/${teamId}/bots/${botId}/chat-agent`;
+// Configuration
+const CONFIG = {
+  teamId: 'my4YXyYm6SQ5ewtD75RN',
+  botId: 'wxepOdO8DrIY3Hgszjip',
+  maxFileSize: 5 * 1024 * 1024,
+  conversationTimeout: 12 * 60 * 60 * 1000,
+};
+const chatEndpoint = `https://api.docsbot.ai/teams/${CONFIG.teamId}/bots/${CONFIG.botId}/chat-agent`;
 
+// State
 let conversationId = getOrCreateConversationId();
-const chatHistory = document.getElementById('chat-history');
-const chatForm = document.getElementById('chat-form');
-const chatInput = document.getElementById('chat-input');
-const newChatBtn = document.getElementById('new-chat-btn');
-const imageInput = document.getElementById('image-input');
-const imagePreview = document.getElementById('image-preview');
-const attachBtn = document.getElementById('attach-btn');
+let chatTranscript = [];
+let selectedFiles = [];
+let isStreaming = false;
 
-let selectedImageURLs = [];
+// Elements
+const elements = {
+  chatHistory: document.getElementById('chat-history'),
+  chatForm: document.getElementById('chat-form'),
+  chatInput: document.getElementById('chat-input'),
+  sendBtn: document.getElementById('send-btn'),
+  newChatBtn: document.getElementById('new-chat-btn'),
+  exportBtn: document.getElementById('export-btn'),
+  productSelect: document.getElementById('product-select'),
+  imageInput: document.getElementById('image-input'),
+  imagePreview: document.getElementById('image-preview'),
+  attachBtn: document.getElementById('attach-btn'),
+};
 
 function getOrCreateConversationId() {
-  const stored = localStorage.getItem('conversationId');
-  const timestamp = localStorage.getItem('conversationTimestamp');
-  const now = Date.now();
-  const twelveHours = 12 * 60 * 60 * 1000;
-
-  if (!stored || !timestamp || now - timestamp > twelveHours) {
-    const newId = crypto.randomUUID();
-    localStorage.setItem('conversationId', newId);
-    localStorage.setItem('conversationTimestamp', now);
-    return newId;
+  try {
+    const stored = localStorage.getItem('conversationId');
+    const timestamp = localStorage.getItem('conversationTimestamp');
+    const now = Date.now();
+    if (!stored || !timestamp || now - parseInt(timestamp) > CONFIG.conversationTimeout) {
+      const newId = crypto.randomUUID();
+      localStorage.setItem('conversationId', newId);
+      localStorage.setItem('conversationTimestamp', now.toString());
+      return newId;
+    }
+    return stored;
+  } catch {
+    return crypto.randomUUID();
   }
-
-  return stored;
 }
 
 function resetConversation() {
-  localStorage.removeItem('conversationId');
-  localStorage.removeItem('conversationTimestamp');
+  try {
+    localStorage.removeItem('conversationId');
+    localStorage.removeItem('conversationTimestamp');
+  } catch {}
   conversationId = getOrCreateConversationId();
-  chatHistory.innerHTML = '';
+  elements.chatHistory.innerHTML = '';
+  chatTranscript = [];
+  clearSelectedFiles();
+  appendMessage("Hello! How can I help you today?", 'bot');
 }
 
-function appendMessage(text, sender = 'bot') {
+function appendMessage(content, sender = 'bot', sources = null) {
   const div = document.createElement('div');
   div.className = `message ${sender}`;
-  const html = marked.parse(text);
-  div.innerHTML = DOMPurify.sanitize(html);
-  chatHistory.appendChild(div);
-  chatHistory.scrollTop = chatHistory.scrollHeight;
+  if (sender === 'bot') {
+    div.innerHTML = DOMPurify.sanitize(marked.parse(content));
+    if (sources?.length) {
+      const src = document.createElement('div');
+      src.className = 'sources';
+      src.innerHTML = '<h4>Sources:</h4>' +
+        sources.map(s => `<div><a href="${s.url}" target="_blank">${s.title}</a></div>`).join('');
+      div.appendChild(src);
+    }
+  } else {
+    div.textContent = content;
+  }
+  elements.chatHistory.appendChild(div);
+  scrollToBottom();
+  chatTranscript.push({ sender, content, timestamp: new Date().toISOString(), ...(sources && { sources }) });
+}
+
+function appendImage(url, sender = 'user') {
+  const div = document.createElement('div');
+  div.className = `message ${sender}`;
+  const img = document.createElement('img');
+  img.src = url;
+  div.appendChild(img);
+  elements.chatHistory.appendChild(div);
+  scrollToBottom();
 }
 
 function showTyping() {
-  const typing = document.createElement('div');
-  typing.className = 'typing';
-  typing.id = 'typing';
-  typing.textContent = 'Agent is typing...';
-  chatHistory.appendChild(typing);
-  chatHistory.scrollTop = chatHistory.scrollHeight;
+  removeTyping();
+  const t = document.createElement('div');
+  t.className = 'typing';
+  t.id = 'typing-indicator';
+  t.textContent = '🤖 Agent is thinking...';
+  elements.chatHistory.appendChild(t);
+  scrollToBottom();
 }
 
 function removeTyping() {
-  const typing = document.getElementById('typing');
-  if (typing) typing.remove();
+  const t = document.getElementById('typing-indicator');
+  if (t) t.remove();
 }
 
-chatForm.addEventListener('submit', async (e) => {
+function scrollToBottom() {
+  elements.chatHistory.scrollTop = elements.chatHistory.scrollHeight;
+}
+
+function showError(msg) {
+  const e = document.createElement('div');
+  e.className = 'error-message';
+  e.textContent = `Error: ${msg}`;
+  elements.chatHistory.appendChild(e);
+  scrollToBottom();
+}
+
+// ===== Revised streamChat =====
+async function streamChat(requestBody) {
+  const res = await fetch(chatEndpoint, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify(requestBody)
+  });
+  if (!res.ok) {
+    const txt = await res.text();
+    throw new Error(`Request failed (${res.status}): ${txt}`);
+  }
+
+  const reader = res.body.getReader();
+  const dec = new TextDecoder();
+  let buffer = '', currentAnswer = '', streamingDiv = null;
+
+  try {
+    while (true) {
+      const { value, done } = await reader.read();
+      if (done) break;
+      buffer += dec.decode(value, { stream: true });
+
+      // Split lines, keep incomplete tail
+      const lines = buffer.split('\n');
+      buffer = lines.pop() || '';
+
+      // Hoist eventType & dataObj
+      let eventType = 'message';
+      let dataObj = null;
+
+      for (const line of lines) {
+        if (!line.trim()) continue;
+        if (line.startsWith('event: ')) {
+          eventType = line.slice(7).trim();
+          continue;
+        }
+        if (line.startsWith('data: ')) {
+          const jsonStr = line.slice(6).trim();
+          if (jsonStr === '[DONE]') return;
+          try { dataObj = JSON.parse(jsonStr); }
+          catch (e) { console.warn('Invalid SSE JSON', jsonStr); continue; }
+
+          if (eventType === 'stream' && dataObj.answer) {
+            currentAnswer += dataObj.answer;
+            if (!streamingDiv) {
+              removeTyping();
+              streamingDiv = document.createElement('div');
+              streamingDiv.className = 'message bot';
+              elements.chatHistory.appendChild(streamingDiv);
+            }
+            streamingDiv.innerHTML = DOMPurify.sanitize(marked.parse(currentAnswer));
+            scrollToBottom();
+          }
+          else if (eventType === 'lookup_answer' && dataObj.answer) {
+            if (streamingDiv) {
+              streamingDiv.innerHTML = DOMPurify.sanitize(marked.parse(dataObj.answer));
+              if (dataObj.sources?.length) {
+                const srcDiv = document.createElement('div');
+                srcDiv.className = 'sources';
+                srcDiv.innerHTML = '<h4>📚 Sources:</h4>' +
+                  dataObj.sources.map(s => `<div><a href="${s.url}" target="_blank">${s.title}</a></div>`).join('');
+                streamingDiv.appendChild(srcDiv);
+              }
+            } else {
+              appendMessage(dataObj.answer, 'bot', dataObj.sources);
+            }
+            chatTranscript.push({
+              sender: 'bot',
+              content: dataObj.answer,
+              timestamp: new Date().toISOString(),
+              ...(dataObj.sources && { sources: dataObj.sources })
+            });
+            scrollToBottom();
+          }
+          else if (eventType === 'answer' && dataObj.answer) {
+            appendMessage(dataObj.answer, 'bot');
+          }
+          else if (eventType === 'is_resolved_question' && dataObj.answer) {
+            appendMessage(dataObj.answer, 'bot');
+            if (dataObj.options) {
+              const optDiv = document.createElement('div');
+              optDiv.className = 'message bot';
+              optDiv.innerHTML = `
+                <div style="display:flex;gap:10px;margin-top:10px">
+                  <button onclick="sendQuickReply('${dataObj.options.yes}')" style="padding:8px 16px;border:none;border-radius:20px;cursor:pointer;background:#0078d4;color:white">
+                    ${dataObj.options.yes}
+                  </button>
+                  <button onclick="sendQuickReply('${dataObj.options.no}')" style="padding:8px 16px;border:none;border-radius:20px;cursor:pointer;background:#f1f1f1">
+                    ${dataObj.options.no}
+                  </button>
+                </div>`;
+              elements.chatHistory.appendChild(optDiv);
+              scrollToBottom();
+            }
+          }
+        }
+      }
+    }
+  } finally {
+    removeTyping();
+    isStreaming = false;
+    updateSendButton();
+  }
+}
+// ===== end streamChat =====
+
+window.sendQuickReply = text => {
+  elements.chatInput.value = text;
+  elements.chatForm.dispatchEvent(new Event('submit'));
+};
+
+function validateFile(file) {
+  if (!file.type.startsWith('image/')) throw new Error('Only images allowed');
+  if (file.size > CONFIG.maxFileSize) throw new Error(`Max file size ${(CONFIG.maxFileSize/1e6).toFixed(1)}MB`);
+  return true;
+}
+
+function addSelectedFile(file) {
+  try {
+    validateFile(file);
+    const obj = { file, url: URL.createObjectURL(file), id: crypto.randomUUID() };
+    selectedFiles.push(obj);
+    renderImagePreview();
+  } catch (e) { showError(e.message); }
+}
+function removeSelectedFile(id) {
+  const idx = selectedFiles.findIndex(f => f.id === id);
+  if (idx > -1) {
+    URL.revokeObjectURL(selectedFiles[idx].url);
+    selectedFiles.splice(idx, 1);
+    renderImagePreview();
+  }
+}
+function clearSelectedFiles() {
+  selectedFiles.forEach(f => URL.revokeObjectURL(f.url));
+  selectedFiles = [];
+  renderImagePreview();
+}
+function renderImagePreview() {
+  elements.imagePreview.innerHTML = '';
+  selectedFiles.forEach(f => {
+    const c = document.createElement('div');
+    c.className = 'image-preview-item';
+    const img = document.createElement('img');
+    img.src = f.url; img.alt = f.file.name;
+    const btn = document.createElement('button');
+    btn.className = 'remove-image'; btn.textContent = '×';
+    btn.onclick = () => removeSelectedFile(f.id);
+    c.append(img, btn);
+    elements.imagePreview.appendChild(c);
+  });
+}
+
+function updateSendButton() {
+  const has = elements.chatInput.value.trim() || selectedFiles.length;
+  elements.sendBtn.disabled = isStreaming || !has;
+  elements.sendBtn.textContent = isStreaming ? 'Sending...' : 'Send';
+}
+
+function exportTranscript() {
+  const data = {
+    conversationId,
+    timestamp: new Date().toISOString(),
+    product: elements.productSelect.value,
+    messages: chatTranscript
+  };
+  const blob = new Blob([JSON.stringify(data,null,2)],{type:'application/json'});
+  const url = URL.createObjectURL(blob);
+  const a = document.createElement('a');
+  a.href = url; a.download = `chat-transcript-${new Date().toISOString().split('T')[0]}.json`;
+  document.body.appendChild(a); a.click(); a.remove();
+  URL.revokeObjectURL(url);
+}
+
+// Event listeners
+elements.chatForm.addEventListener('submit', async e => {
   e.preventDefault();
-  const message = chatInput.value.trim();
-  if (!message && selectedImageURLs.length === 0) return;
+  const msg = elements.chatInput.value.trim();
+  const prod = elements.productSelect.value;
+  if (!msg && !selectedFiles.length) return;
+  if (isStreaming) return;
 
-  appendMessage(message, 'user');
-  selectedImageURLs.forEach(url => appendMessage(`<img src="${url}" />`, 'user'));
+  const fullMsg = msg
+    ? `[Product: ${prod}] ${msg}`
+    : `[Product: ${prod}] [Image uploaded]`;
 
-  chatInput.value = '';
-  imagePreview.innerHTML = '';
-  const image_urls = selectedImageURLs.slice();
-  selectedImageURLs = [];
+  if (msg) appendMessage(msg, 'user');
+  selectedFiles.forEach(f => appendImage(f.url, 'user'));
+  elements.chatInput.value = '';
+  clearSelectedFiles();
 
   const body = {
     conversationId,
-    question: message,
+    question: fullMsg,
     metadata: {
-      name: 'John Doe',
-      email: 'john@example.com',
-      referrer: document.referrer
+      name: 'User',
+      email: 'user@example.com',
+      referrer: document.referrer || window.location.href
     },
     document_retriever: true,
     followup_rating: true,
-    full_source: true,
-    stream: false,
-    image_urls
+    full_source: false,
+    stream: true,
+    image_urls: selectedFiles.length ? selectedFiles.map(f => f.url) : null
   };
 
+  isStreaming = true;
+  updateSendButton();
   showTyping();
-
   try {
-    const response = await fetch(chatEndpoint, {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify(body)
-    });
-
-    const rawText = await response.text();
-    console.log('Raw response from server:', rawText);
-    removeTyping();
-
-    if (!response.ok) {
-      handleErrors(response.status);
-      appendMessage('[Server error]', 'bot');
-      return;
-    }
-
-    let data;
-    try {
-      data = JSON.parse(rawText);
-    } catch (err) {
-      console.error('Failed to parse JSON:', err);
-      appendMessage('[Invalid response from server]', 'bot');
-      return;
-    }
-
-    if (Array.isArray(data)) {
-      const answerEvent = data.find(event =>
-        event.event === 'answer' || event.event === 'lookup_answer'
-      );
-
-      if (answerEvent && answerEvent.data && answerEvent.data.answer) {
-        let message = answerEvent.data.answer;
-
-        if (answerEvent.data.sources && answerEvent.data.sources.length > 0) {
-          const links = answerEvent.data.sources
-            .map(src => `- [${src.title}](${src.url})`)
-            .join('\n');
-          message += `\n\n**Sources:**\n${links}`;
-        }
-
-        appendMessage(message, 'bot');
-      } else {
-        appendMessage('[No usable answer in response]', 'bot');
-      }
-    } else if (data.answer) {
-      appendMessage(data.answer, 'bot');
-    } else {
-      appendMessage('[No response]', 'bot');
-    }
+    await streamChat(body);
   } catch (err) {
+    console.error(err);
     removeTyping();
-    console.error('Fetch error:', err);
-    appendMessage('[Error contacting chat server]', 'bot');
+    showError(err.message);
   }
 });
 
-function handleErrors(status) {
-  const messages = {
-    400: 'Invalid input.',
-    403: 'Authentication failed.',
-    404: 'Bot not found.',
-    409: 'Bot not ready.',
-    413: 'Message too large.',
-    429: 'Rate limit exceeded. Please wait.',
-    500: 'Server error. Please try again.'
-  };
-  appendMessage(messages[status] || 'Unknown error.', 'bot');
-}
-
-newChatBtn.addEventListener('click', resetConversation);
-attachBtn.addEventListener('click', () => imageInput.click());
-
-imageInput.addEventListener('change', async (e) => {
-  const files = Array.from(e.target.files);
-  for (let file of files) {
-    const url = await uploadImage(file);
-    selectedImageURLs.push(url);
-    renderImagePreview(url);
-  }
+elements.newChatBtn.addEventListener('click', () => {
+  if (confirm('Start a new conversation?')) resetConversation();
+});
+elements.exportBtn.addEventListener('click', exportTranscript);
+elements.attachBtn.addEventListener('click', () => elements.imageInput.click());
+elements.imageInput.addEventListener('change', e => {
+  Array.from(e.target.files).forEach(addSelectedFile);
   e.target.value = '';
 });
-
-function renderImagePreview(url) {
-  const img = document.createElement('img');
-  img.src = url;
-  imagePreview.appendChild(img);
-}
-
-async function uploadImage(file) {
-  return URL.createObjectURL(file);
-}
-
-chatForm.addEventListener('dragover', (e) => e.preventDefault());
-chatForm.addEventListener('drop', async (e) => {
+elements.chatInput.addEventListener('input', updateSendButton);
+elements.chatForm.addEventListener('dragover', e => e.preventDefault());
+elements.chatForm.addEventListener('drop', e => {
   e.preventDefault();
-  const files = Array.from(e.dataTransfer.files);
-  for (let file of files) {
-    if (file.type.startsWith('image/')) {
-      const url = await uploadImage(file);
-      selectedImageURLs.push(url);
-      renderImagePreview(url);
-    }
+  Array.from(e.dataTransfer.files)
+    .filter(f => f.type.startsWith('image/'))
+    .forEach(addSelectedFile);
+});
+elements.chatInput.addEventListener('keydown', e => {
+  if (e.key === 'Enter' && !e.shiftKey) {
+    e.preventDefault();
+    elements.chatForm.dispatchEvent(new Event('submit'));
   }
+});
+
+// Initialize
+updateSendButton();
+appendMessage("👋 Hello! I'm here to help you with your questions. What would you like to know?", 'bot');
+window.addEventListener('beforeunload', () => {
+  selectedFiles.forEach(f => URL.revokeObjectURL(f.url));
 });

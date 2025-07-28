@@ -4,27 +4,45 @@
   <meta charset="UTF-8" />
   <title>Chat Agent</title>
   <meta name="viewport" content="width=device-width, initial-scale=1.0"/>
-  <link rel="stylesheet" href="styles.css" />
   <link rel="icon" href="data:,">
+  <link rel="stylesheet" href="style.css">
+  <!-- DOMPurify & marked for sanitizing and Markdown parsing -->
   <script src="https://unpkg.com/dompurify@2.4.0/dist/purify.min.js"></script>
   <script src="https://cdn.jsdelivr.net/npm/marked/marked.min.js"></script>
 </head>
 <body>
   <div class="chat-container">
     <header>
-      <h2>Chat Agent</h2>
-      <button id="new-chat-btn">New Conversation</button>
+      <h2>🤖 Chat Agent</h2>
+      <div class="header-controls">
+        <label for="product-select">Product:</label>
+        <select id="product-select">
+          <option value="AnywhereUSB Plus">AnywhereUSB Plus</option>
+          <option value="Connect Sensor">Connect Sensor</option>
+          <option value="ConnectCore 6">ConnectCore 6</option>
+          <option value="Digi Remote Manager">Digi Remote Manager</option>
+          <option value="Digi TransPort Family">Digi TransPort Family</option>
+          <option value="Not Listed">Not Listed</option>
+          <option value="Other">Other</option>
+        </select>
+        <button id="new-chat-btn">New Chat</button>
+        <button id="export-btn">Export</button>
+      </div>
     </header>
 
     <div id="chat-history" class="chat-history"></div>
 
-    <form id="chat-form" autocomplete="off">
-      <input type="text" id="chat-input" placeholder="Type a message..." required />
-      <input type="file" id="image-input" accept="image/*" multiple hidden />
-      <button type="button" id="attach-btn">📎</button>
-      <button type="submit">Send</button>
-    </form>
-    <div id="image-preview" class="image-preview"></div>
+    <div class="form-container">
+      <div id="image-preview" class="image-preview"></div>
+      <form id="chat-form" class="chat-form" autocomplete="off">
+        <div class="input-container">
+          <input type="text" id="chat-input" placeholder="Type your message..." required />
+          <input type="file" id="image-input" accept="image/*" multiple hidden />
+          <button type="button" id="attach-btn" class="attach-btn">📎</button>
+        </div>
+        <button type="submit" id="send-btn" class="send-btn">Send</button>
+      </form>
+    </div>
   </div>
 
   <script src="script.js"></script>
