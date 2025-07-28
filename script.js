@@ -135,8 +135,8 @@ function showError(message) {
 async function streamChat(requestBody) {
   const res = await fetch(chatEndpoint, {
     method: 'POST',
-    headers: {'Content-Type':'application/json'},
-    body: JSON.stringify(requestBody)
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify(requestBody),
   });
   if (!res.ok) {
     const txt = await res.text();
@@ -145,12 +145,13 @@ async function streamChat(requestBody) {
 
   const reader = res.body.getReader();
   const dec    = new TextDecoder();
-  let buffer = '', currentAnswer = '', streamingDiv = null;
+  let buffer        = '';
+  let currentAnswer = '';
+  let streamingDiv  = null;
 
-  // Helper to dispatch each logical SSE event:
+  // Dispatch one complete SSE event at a time
   function handleEvent(type, data) {
     if (type === 'stream' && data.answer != null) {
-      // first token: remove typing indicator & create bubble
       if (!streamingDiv) {
         removeTyping();
         streamingDiv = document.createElement('div');
@@ -162,20 +163,27 @@ async function streamChat(requestBody) {
       scrollToBottom();
     }
     else if (type === 'lookup_answer' && data.answer) {
-      // final answer + sources
       if (streamingDiv) {
         streamingDiv.innerHTML = DOMPurify.sanitize(marked.parse(data.answer));
-        if (data.sources?.length) {
+        if (data.sources && data.sources.length) {
           const srcDiv = document.createElement('div');
           srcDiv.className = 'sources';
           srcDiv.innerHTML = '<h4>📚 Sources:</h4>' +
-            data.sources.map(s => `<div><a href="${s.url}" target="_blank">${s.title}</a></div>`).join('');
+            data.sources
+              .filter((s,i,arr) => arr.findIndex(x=>x.url===s.url)===i) // optional dedupe
+              .map(s => `<div><a href="${s.url}" target="_blank">${s.title}</a></div>`)
+              .join('');
           streamingDiv.appendChild(srcDiv);
         }
       } else {
         appendMessage(data.answer, 'bot', data.sources);
       }
-      chatTranscript.push({ sender:'bot', content:data.answer, timestamp:new Date().toISOString(), ...(data.sources && {sources:data.sources}) });
+      chatTranscript.push({
+        sender:   'bot',
+        content:  data.answer,
+        timestamp:new Date().toISOString(),
+        ...(data.sources && { sources: data.sources })
+      });
       scrollToBottom();
     }
     else if (type === 'answer' && data.answer) {
@@ -201,16 +209,16 @@ async function streamChat(requestBody) {
     while (true) {
       const { value, done } = await reader.read();
       if (done) break;
-      buffer += dec.decode(value, {stream:true});
+      buffer += dec.decode(value, { stream: true });
 
-      // split off complete events; leave partial in buffer
+      // Split completed SSE events on double-newline
       const parts = buffer.split('\n\n');
-      buffer = parts.pop();
+      buffer = parts.pop(); // leave the partial tail in buffer
 
       for (const block of parts) {
         const lines = block.split('\n');
         let eventType = 'message';
-        let rawData = '';
+        let rawData   = '';
 
         for (const line of lines) {
           if (line.startsWith('event: ')) {
@@ -227,11 +235,11 @@ async function streamChat(requestBody) {
           return;
         }
 
-        // try JSON, fallback to plain-text answer
+        // Try to parse JSON; if that fails, treat it as a plain-text chunk
         let data;
         try {
           data = JSON.parse(rawData);
-        } catch {
+        } catch (err) {
           data = { answer: rawData };
         }
 
@@ -244,6 +252,7 @@ async function streamChat(requestBody) {
     updateSendButton();
   }
 }
+
 
 // Image file handling (validateFile, addSelectedFile, etc.)
 // ... (unchanged, same as before) ...
