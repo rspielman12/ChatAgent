@@ -91,7 +91,7 @@ function showTyping() {
   const t = document.createElement('div');
   t.className = 'typing';
   t.id = 'typing-indicator';
-  t.textContent = '🤖 Agent is thinking...';
+  t.textContent = '🤖 Agent is responding...';
   elements.chatHistory.appendChild(t);
   scrollToBottom();
 }
@@ -314,7 +314,7 @@ elements.chatForm.addEventListener('submit', async e => {
     },
     document_retriever: true,
     followup_rating: true,
-    full_source: false,
+    full_source: true,
     stream: true,
     image_urls: selectedFiles.length ? selectedFiles.map(f => f.url) : null
   };
