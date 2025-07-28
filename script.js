@@ -308,7 +308,7 @@ function renderImagePreview() {
     btn.textContent = '×';
     btn.onclick = () => removeSelectedFile(f.id);
     container.append(img, btn);
-    elements.chatPreview.appendChild(container);
+    elements.imagePreview.appendChild(container);
   });
 }
 
