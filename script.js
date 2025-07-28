@@ -27,9 +27,7 @@ const elements = {
   attachBtn:     document.getElementById('attach-btn'),
 };
 
-// ————————————————
 // Utility: File → data-URI
-// ————————————————
 function fileToDataUrl(file) {
   return new Promise((resolve, reject) => {
     const reader = new FileReader();
@@ -39,14 +37,12 @@ function fileToDataUrl(file) {
   });
 }
 
-// ————————————————
 // Conversation ID management
-// ————————————————
 function getOrCreateConversationId() {
   try {
-    const stored    = localStorage.getItem('conversationId');
-    const ts        = localStorage.getItem('conversationTimestamp');
-    const now       = Date.now();
+    const stored = localStorage.getItem('conversationId');
+    const ts     = localStorage.getItem('conversationTimestamp');
+    const now    = Date.now();
     if (!stored || !ts || now - parseInt(ts) > CONFIG.conversationTimeout) {
       const id = crypto.randomUUID();
       localStorage.setItem('conversationId', id);
@@ -71,9 +67,7 @@ function resetConversation() {
   appendMessage("👋 Hello! I'm here to help you with your questions. What would you like to know?", 'bot');
 }
 
-// ————————————————
-// DOM Helpers
-// ————————————————
+// DOM Helpers (appendMessage, appendImage, etc.)
 function appendMessage(content, sender = 'bot', sources = null) {
   const div = document.createElement('div');
   div.className = `message ${sender}`;
@@ -137,9 +131,7 @@ function showError(message) {
   scrollToBottom();
 }
 
-// ————————————————
 // Streaming implementation (fixed eventType scoping)
-// ————————————————
 async function streamChat(requestBody) {
   const res = await fetch(chatEndpoint, {
     method: 'POST',
@@ -167,7 +159,7 @@ async function streamChat(requestBody) {
       const lines = buffer.split('\n');
       buffer = lines.pop() || '';
 
-      // persist these across each event:
+      // persist these across each event
       let eventType = 'message';
       let dataObj = null;
 
@@ -182,7 +174,7 @@ async function streamChat(requestBody) {
           if (jsonStr === '[DONE]') return;
           try {
             dataObj = JSON.parse(jsonStr);
-          } catch (err) {
+          } catch {
             console.warn('Invalid SSE JSON:', jsonStr);
             continue;
           }
@@ -254,17 +246,15 @@ async function streamChat(requestBody) {
   }
 }
 
-// ————————————————
 // Quick‐reply helper
-// ————————————————
 window.sendQuickReply = function(text) {
   elements.chatInput.value = text;
   elements.chatForm.dispatchEvent(new Event('submit'));
 };
 
-// ————————————————
-// Image file handling
-// ————————————————
+// Image file handling (validateFile, addSelectedFile, etc.)
+// ... (unchanged, same as before) ...
+
 function validateFile(file) {
   if (!file.type.startsWith('image/')) {
     throw new Error('Only image files are supported');
@@ -318,13 +308,11 @@ function renderImagePreview() {
     btn.textContent = '×';
     btn.onclick = () => removeSelectedFile(f.id);
     container.append(img, btn);
-    elements.imagePreview.appendChild(container);
+    elements.chatPreview.appendChild(container);
   });
 }
 
-// ————————————————
 // Send‐button & export helpers
-// ————————————————
 function updateSendButton() {
   const hasContent = elements.chatInput.value.trim() || selectedFiles.length > 0;
   elements.sendBtn.disabled = isStreaming || !hasContent;
@@ -349,13 +337,18 @@ function exportTranscript() {
   URL.revokeObjectURL(url);
 }
 
-// ————————————————
 // Event Listeners
-// ————————————————
 elements.chatForm.addEventListener('submit', async (e) => {
   e.preventDefault();
-  const message = elements.chatInput.value.trim();
+
+  // ** Validate product selection **
   const product = elements.productSelect.value;
+  if (!product) {
+    showError('Please select a product before sending your message.');
+    return;
+  }
+
+  const message = elements.chatInput.value.trim();
   if (!message && selectedFiles.length === 0) return;
   if (isStreaming) return;
 
@@ -437,12 +430,9 @@ elements.chatInput.addEventListener('keydown', e => {
   }
 });
 
-// ————————————————
 // Initialization
-// ————————————————
 updateSendButton();
 appendMessage("👋 Hello! I'm here to help you with your questions. What would you like to know?", 'bot');
-
 window.addEventListener('beforeunload', () => {
   selectedFiles.forEach(f => URL.revokeObjectURL(f.url));
 });
