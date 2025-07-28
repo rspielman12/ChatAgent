@@ -387,7 +387,7 @@ elements.chatForm.addEventListener('submit', async (e) => {
     },
     document_retriever: true,
     followup_rating: true,
-    full_source: false,
+    full_source: true,
     stream: true,
     image_urls: imageUrls && imageUrls.length ? imageUrls : null
   };
