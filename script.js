@@ -240,7 +240,12 @@ async function streamChat(requestBody) {
     updateSendButton();
   }
 }
+// ===== end streamChat =====
 
+window.sendQuickReply = text => {
+  elements.chatInput.value = text;
+  elements.chatForm.dispatchEvent(new Event('submit'));
+};
 
 
 // Image file handling (validateFile, addSelectedFile, etc.)
