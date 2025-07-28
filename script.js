@@ -2,8 +2,8 @@
 const CONFIG = {
   teamId: 'my4YXyYm6SQ5ewtD75RN',
   botId: 'wxepOdO8DrIY3Hgszjip',
-  maxFileSize: 5 * 1024 * 1024,
-  conversationTimeout: 12 * 60 * 60 * 1000,
+  maxFileSize: 5 * 1024 * 1024,          // 5 MB
+  conversationTimeout: 12 * 60 * 60 * 1000 // 12 hours
 };
 const chatEndpoint = `https://api.docsbot.ai/teams/${CONFIG.teamId}/bots/${CONFIG.botId}/chat-agent`;
 
@@ -13,30 +13,45 @@ let chatTranscript = [];
 let selectedFiles = [];
 let isStreaming = false;
 
-// Elements
+// Cached DOM elements
 const elements = {
-  chatHistory: document.getElementById('chat-history'),
-  chatForm: document.getElementById('chat-form'),
-  chatInput: document.getElementById('chat-input'),
-  sendBtn: document.getElementById('send-btn'),
-  newChatBtn: document.getElementById('new-chat-btn'),
-  exportBtn: document.getElementById('export-btn'),
+  chatHistory:   document.getElementById('chat-history'),
+  chatForm:      document.getElementById('chat-form'),
+  chatInput:     document.getElementById('chat-input'),
+  sendBtn:       document.getElementById('send-btn'),
+  newChatBtn:    document.getElementById('new-chat-btn'),
+  exportBtn:     document.getElementById('export-btn'),
   productSelect: document.getElementById('product-select'),
-  imageInput: document.getElementById('image-input'),
-  imagePreview: document.getElementById('image-preview'),
-  attachBtn: document.getElementById('attach-btn'),
+  imageInput:    document.getElementById('image-input'),
+  imagePreview:  document.getElementById('image-preview'),
+  attachBtn:     document.getElementById('attach-btn'),
 };
 
+// ————————————————
+// Utility: File → data-URI
+// ————————————————
+function fileToDataUrl(file) {
+  return new Promise((resolve, reject) => {
+    const reader = new FileReader();
+    reader.onload  = () => resolve(reader.result);
+    reader.onerror = () => reject(new Error('Failed to read file'));
+    reader.readAsDataURL(file);
+  });
+}
+
+// ————————————————
+// Conversation ID management
+// ————————————————
 function getOrCreateConversationId() {
   try {
-    const stored = localStorage.getItem('conversationId');
-    const timestamp = localStorage.getItem('conversationTimestamp');
-    const now = Date.now();
-    if (!stored || !timestamp || now - parseInt(timestamp) > CONFIG.conversationTimeout) {
-      const newId = crypto.randomUUID();
-      localStorage.setItem('conversationId', newId);
+    const stored    = localStorage.getItem('conversationId');
+    const ts        = localStorage.getItem('conversationTimestamp');
+    const now       = Date.now();
+    if (!stored || !ts || now - parseInt(ts) > CONFIG.conversationTimeout) {
+      const id = crypto.randomUUID();
+      localStorage.setItem('conversationId', id);
       localStorage.setItem('conversationTimestamp', now.toString());
-      return newId;
+      return id;
     }
     return stored;
   } catch {
@@ -53,9 +68,12 @@ function resetConversation() {
   elements.chatHistory.innerHTML = '';
   chatTranscript = [];
   clearSelectedFiles();
-  appendMessage("Hello! How can I help you today?", 'bot');
+  appendMessage("👋 Hello! I'm here to help you with your questions. What would you like to know?", 'bot');
 }
 
+// ————————————————
+// DOM Helpers
+// ————————————————
 function appendMessage(content, sender = 'bot', sources = null) {
   const div = document.createElement('div');
   div.className = `message ${sender}`;
@@ -73,7 +91,12 @@ function appendMessage(content, sender = 'bot', sources = null) {
   }
   elements.chatHistory.appendChild(div);
   scrollToBottom();
-  chatTranscript.push({ sender, content, timestamp: new Date().toISOString(), ...(sources && { sources }) });
+  chatTranscript.push({
+    sender,
+    content,
+    timestamp: new Date().toISOString(),
+    ...(sources && { sources })
+  });
 }
 
 function appendImage(url, sender = 'user') {
@@ -81,6 +104,7 @@ function appendImage(url, sender = 'user') {
   div.className = `message ${sender}`;
   const img = document.createElement('img');
   img.src = url;
+  img.alt = 'Uploaded image';
   div.appendChild(img);
   elements.chatHistory.appendChild(div);
   scrollToBottom();
@@ -89,8 +113,8 @@ function appendImage(url, sender = 'user') {
 function showTyping() {
   removeTyping();
   const t = document.createElement('div');
-  t.className = 'typing';
   t.id = 'typing-indicator';
+  t.className = 'typing';
   t.textContent = '🤖 Agent is thinking...';
   elements.chatHistory.appendChild(t);
   scrollToBottom();
@@ -105,15 +129,17 @@ function scrollToBottom() {
   elements.chatHistory.scrollTop = elements.chatHistory.scrollHeight;
 }
 
-function showError(msg) {
+function showError(message) {
   const e = document.createElement('div');
   e.className = 'error-message';
-  e.textContent = `Error: ${msg}`;
+  e.textContent = `Error: ${message}`;
   elements.chatHistory.appendChild(e);
   scrollToBottom();
 }
 
-// ===== Revised streamChat =====
+// ————————————————
+// Streaming implementation (fixed eventType scoping)
+// ————————————————
 async function streamChat(requestBody) {
   const res = await fetch(chatEndpoint, {
     method: 'POST',
@@ -126,20 +152,22 @@ async function streamChat(requestBody) {
   }
 
   const reader = res.body.getReader();
-  const dec = new TextDecoder();
-  let buffer = '', currentAnswer = '', streamingDiv = null;
+  const decoder = new TextDecoder();
+  let buffer = '',
+      currentAnswer = '',
+      streamingDiv = null;
 
   try {
     while (true) {
       const { value, done } = await reader.read();
       if (done) break;
-      buffer += dec.decode(value, { stream: true });
+      buffer += decoder.decode(value, { stream: true });
 
-      // Split lines, keep incomplete tail
+      // split on lines, keep last partial line
       const lines = buffer.split('\n');
       buffer = lines.pop() || '';
 
-      // Hoist eventType & dataObj
+      // persist these across each event:
       let eventType = 'message';
       let dataObj = null;
 
@@ -152,9 +180,14 @@ async function streamChat(requestBody) {
         if (line.startsWith('data: ')) {
           const jsonStr = line.slice(6).trim();
           if (jsonStr === '[DONE]') return;
-          try { dataObj = JSON.parse(jsonStr); }
-          catch (e) { console.warn('Invalid SSE JSON', jsonStr); continue; }
+          try {
+            dataObj = JSON.parse(jsonStr);
+          } catch (err) {
+            console.warn('Invalid SSE JSON:', jsonStr);
+            continue;
+          }
 
+          // STREAMING TOKENS
           if (eventType === 'stream' && dataObj.answer) {
             currentAnswer += dataObj.answer;
             if (!streamingDiv) {
@@ -166,6 +199,7 @@ async function streamChat(requestBody) {
             streamingDiv.innerHTML = DOMPurify.sanitize(marked.parse(currentAnswer));
             scrollToBottom();
           }
+          // FINAL LOOKUP_ANSWER
           else if (eventType === 'lookup_answer' && dataObj.answer) {
             if (streamingDiv) {
               streamingDiv.innerHTML = DOMPurify.sanitize(marked.parse(dataObj.answer));
@@ -187,20 +221,22 @@ async function streamChat(requestBody) {
             });
             scrollToBottom();
           }
+          // SIMPLE ANSWER
           else if (eventType === 'answer' && dataObj.answer) {
             appendMessage(dataObj.answer, 'bot');
           }
+          // FOLLOW-UP RATING
           else if (eventType === 'is_resolved_question' && dataObj.answer) {
             appendMessage(dataObj.answer, 'bot');
             if (dataObj.options) {
               const optDiv = document.createElement('div');
               optDiv.className = 'message bot';
               optDiv.innerHTML = `
-                <div style="display:flex;gap:10px;margin-top:10px">
-                  <button onclick="sendQuickReply('${dataObj.options.yes}')" style="padding:8px 16px;border:none;border-radius:20px;cursor:pointer;background:#0078d4;color:white">
+                <div style="display:flex;gap:10px;margin-top:10px;">
+                  <button onclick="sendQuickReply('${dataObj.options.yes}')" style="padding:8px 16px;background:#0078d4;color:white;border:none;border-radius:20px;cursor:pointer;">
                     ${dataObj.options.yes}
                   </button>
-                  <button onclick="sendQuickReply('${dataObj.options.no}')" style="padding:8px 16px;border:none;border-radius:20px;cursor:pointer;background:#f1f1f1">
+                  <button onclick="sendQuickReply('${dataObj.options.no}')" style="padding:8px 16px;background:#f1f1f1;border:none;border-radius:20px;cursor:pointer;">
                     ${dataObj.options.no}
                   </button>
                 </div>`;
@@ -217,58 +253,81 @@ async function streamChat(requestBody) {
     updateSendButton();
   }
 }
-// ===== end streamChat =====
 
-window.sendQuickReply = text => {
+// ————————————————
+// Quick‐reply helper
+// ————————————————
+window.sendQuickReply = function(text) {
   elements.chatInput.value = text;
   elements.chatForm.dispatchEvent(new Event('submit'));
 };
 
+// ————————————————
+// Image file handling
+// ————————————————
 function validateFile(file) {
-  if (!file.type.startsWith('image/')) throw new Error('Only images allowed');
-  if (file.size > CONFIG.maxFileSize) throw new Error(`Max file size ${(CONFIG.maxFileSize/1e6).toFixed(1)}MB`);
+  if (!file.type.startsWith('image/')) {
+    throw new Error('Only image files are supported');
+  }
+  if (file.size > CONFIG.maxFileSize) {
+    throw new Error(`File size must be less than ${CONFIG.maxFileSize/1024/1024}MB`);
+  }
   return true;
 }
 
 function addSelectedFile(file) {
   try {
     validateFile(file);
-    const obj = { file, url: URL.createObjectURL(file), id: crypto.randomUUID() };
-    selectedFiles.push(obj);
+    const fileObj = {
+      file,
+      url: URL.createObjectURL(file),
+      id: crypto.randomUUID()
+    };
+    selectedFiles.push(fileObj);
     renderImagePreview();
-  } catch (e) { showError(e.message); }
+  } catch (err) {
+    showError(err.message);
+  }
 }
+
 function removeSelectedFile(id) {
   const idx = selectedFiles.findIndex(f => f.id === id);
-  if (idx > -1) {
+  if (idx !== -1) {
     URL.revokeObjectURL(selectedFiles[idx].url);
     selectedFiles.splice(idx, 1);
     renderImagePreview();
   }
 }
+
 function clearSelectedFiles() {
   selectedFiles.forEach(f => URL.revokeObjectURL(f.url));
   selectedFiles = [];
   renderImagePreview();
 }
+
 function renderImagePreview() {
   elements.imagePreview.innerHTML = '';
   selectedFiles.forEach(f => {
-    const c = document.createElement('div');
-    c.className = 'image-preview-item';
+    const container = document.createElement('div');
+    container.className = 'image-preview-item';
     const img = document.createElement('img');
-    img.src = f.url; img.alt = f.file.name;
+    img.src = f.url;
+    img.alt = f.file.name;
     const btn = document.createElement('button');
-    btn.className = 'remove-image'; btn.textContent = '×';
+    btn.className = 'remove-image';
+    btn.textContent = '×';
     btn.onclick = () => removeSelectedFile(f.id);
-    c.append(img, btn);
-    elements.imagePreview.appendChild(c);
+    container.append(img, btn);
+    elements.imagePreview.appendChild(container);
   });
 }
 
+// ————————————————
+// Send‐button & export helpers
+// ————————————————
 function updateSendButton() {
-  const has = elements.chatInput.value.trim() || selectedFiles.length;
-  elements.sendBtn.disabled = isStreaming || !has;
+  const hasContent = elements.chatInput.value.trim() || selectedFiles.length > 0;
+  elements.sendBtn.disabled = isStreaming || !hasContent;
   elements.sendBtn.textContent = isStreaming ? 'Sending...' : 'Send';
 }
 
@@ -279,34 +338,55 @@ function exportTranscript() {
     product: elements.productSelect.value,
     messages: chatTranscript
   };
-  const blob = new Blob([JSON.stringify(data,null,2)],{type:'application/json'});
-  const url = URL.createObjectURL(blob);
-  const a = document.createElement('a');
-  a.href = url; a.download = `chat-transcript-${new Date().toISOString().split('T')[0]}.json`;
-  document.body.appendChild(a); a.click(); a.remove();
+  const blob = new Blob([JSON.stringify(data, null, 2)], { type: 'application/json' });
+  const url  = URL.createObjectURL(blob);
+  const a    = document.createElement('a');
+  a.href     = url;
+  a.download = `chat-transcript-${new Date().toISOString().split('T')[0]}.json`;
+  document.body.appendChild(a);
+  a.click();
+  document.body.removeChild(a);
   URL.revokeObjectURL(url);
 }
 
-// Event listeners
-elements.chatForm.addEventListener('submit', async e => {
+// ————————————————
+// Event Listeners
+// ————————————————
+elements.chatForm.addEventListener('submit', async (e) => {
   e.preventDefault();
-  const msg = elements.chatInput.value.trim();
-  const prod = elements.productSelect.value;
-  if (!msg && !selectedFiles.length) return;
+  const message = elements.chatInput.value.trim();
+  const product = elements.productSelect.value;
+  if (!message && selectedFiles.length === 0) return;
   if (isStreaming) return;
 
-  const fullMsg = msg
-    ? `[Product: ${prod}] ${msg}`
-    : `[Product: ${prod}] [Image uploaded]`;
+  const fullMessage = message
+    ? `[Product: ${product}] ${message}`
+    : `[Product: ${product}] [Image uploaded]`;
 
-  if (msg) appendMessage(msg, 'user');
+  // show user message & preview
+  if (message) appendMessage(message, 'user');
   selectedFiles.forEach(f => appendImage(f.url, 'user'));
   elements.chatInput.value = '';
+
+  // convert files → base64 data‐URIs
+  let imageUrls = null;
+  if (selectedFiles.length) {
+    try {
+      imageUrls = await Promise.all(
+        selectedFiles.map(f => fileToDataUrl(f.file))
+      );
+    } catch {
+      showError('Could not read one of the images');
+      return;
+    }
+  }
+
+  // clear preview & array
   clearSelectedFiles();
 
-  const body = {
+  const requestBody = {
     conversationId,
-    question: fullMsg,
+    question: fullMessage,
     metadata: {
       name: 'User',
       email: 'user@example.com',
@@ -316,14 +396,14 @@ elements.chatForm.addEventListener('submit', async e => {
     followup_rating: true,
     full_source: false,
     stream: true,
-    image_urls: selectedFiles.length ? selectedFiles.map(f => f.url) : null
+    image_urls: imageUrls && imageUrls.length ? imageUrls : null
   };
 
   isStreaming = true;
   updateSendButton();
   showTyping();
   try {
-    await streamChat(body);
+    await streamChat(requestBody);
   } catch (err) {
     console.error(err);
     removeTyping();
@@ -332,7 +412,9 @@ elements.chatForm.addEventListener('submit', async e => {
 });
 
 elements.newChatBtn.addEventListener('click', () => {
-  if (confirm('Start a new conversation?')) resetConversation();
+  if (confirm('Start a new conversation? This will clear the current chat.')) {
+    resetConversation();
+  }
 });
 elements.exportBtn.addEventListener('click', exportTranscript);
 elements.attachBtn.addEventListener('click', () => elements.imageInput.click());
@@ -355,9 +437,12 @@ elements.chatInput.addEventListener('keydown', e => {
   }
 });
 
-// Initialize
+// ————————————————
+// Initialization
+// ————————————————
 updateSendButton();
 appendMessage("👋 Hello! I'm here to help you with your questions. What would you like to know?", 'bot');
+
 window.addEventListener('beforeunload', () => {
   selectedFiles.forEach(f => URL.revokeObjectURL(f.url));
 });
