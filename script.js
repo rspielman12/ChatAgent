@@ -135,74 +135,21 @@ function showError(message) {
 async function streamChat(requestBody) {
   const res = await fetch(chatEndpoint, {
     method: 'POST',
-    headers: { 'Content-Type': 'application/json' },
-    body: JSON.stringify(requestBody),
+    headers: {
+      'Content-Type': 'application/json',
+      'Accept': 'text/event-stream',       // ← ask explicitly for SSE
+    },
+    body: JSON.stringify(requestBody)
   });
-  if (!res.ok) {
-    const txt = await res.text();
-    throw new Error(`Request failed (${res.status}): ${txt}`);
-  }
+  if (!res.ok) throw new Error(await res.text());
 
   const reader = res.body.getReader();
   const dec    = new TextDecoder();
-  let buffer        = '';
-  let currentAnswer = '';
-  let streamingDiv  = null;
+  let buffer = '', currentAnswer = '', streamingDiv = null;
 
-  // Dispatch one complete SSE event at a time
   function handleEvent(type, data) {
-    if (type === 'stream' && data.answer != null) {
-      if (!streamingDiv) {
-        removeTyping();
-        streamingDiv = document.createElement('div');
-        streamingDiv.className = 'message bot';
-        elements.chatHistory.appendChild(streamingDiv);
-      }
-      currentAnswer += data.answer;
-      streamingDiv.innerHTML = DOMPurify.sanitize(marked.parse(currentAnswer));
-      scrollToBottom();
-    }
-    else if (type === 'lookup_answer' && data.answer) {
-      if (streamingDiv) {
-        streamingDiv.innerHTML = DOMPurify.sanitize(marked.parse(data.answer));
-        if (data.sources && data.sources.length) {
-          const srcDiv = document.createElement('div');
-          srcDiv.className = 'sources';
-          srcDiv.innerHTML = '<h4>📚 Sources:</h4>' +
-            data.sources
-              .filter((s,i,arr) => arr.findIndex(x=>x.url===s.url)===i) // optional dedupe
-              .map(s => `<div><a href="${s.url}" target="_blank">${s.title}</a></div>`)
-              .join('');
-          streamingDiv.appendChild(srcDiv);
-        }
-      } else {
-        appendMessage(data.answer, 'bot', data.sources);
-      }
-      chatTranscript.push({
-        sender:   'bot',
-        content:  data.answer,
-        timestamp:new Date().toISOString(),
-        ...(data.sources && { sources: data.sources })
-      });
-      scrollToBottom();
-    }
-    else if (type === 'answer' && data.answer) {
-      appendMessage(data.answer, 'bot');
-    }
-    else if (type === 'is_resolved_question' && data.answer) {
-      appendMessage(data.answer, 'bot');
-      if (data.options) {
-        const optDiv = document.createElement('div');
-        optDiv.className = 'message bot';
-        optDiv.innerHTML = `
-          <div style="display:flex;gap:10px;margin-top:10px;">
-            <button onclick="sendQuickReply('${data.options.yes}')">${data.options.yes}</button>
-            <button onclick="sendQuickReply('${data.options.no}')">${data.options.no}</button>
-          </div>`;
-        elements.chatHistory.appendChild(optDiv);
-        scrollToBottom();
-      }
-    }
+    console.log('🔔 SSE event:', type, data);
+    // … your existing switch/if branches …
   }
 
   try {
@@ -211,37 +158,26 @@ async function streamChat(requestBody) {
       if (done) break;
       buffer += dec.decode(value, { stream: true });
 
-      // Split completed SSE events on double-newline
-      const parts = buffer.split('\n\n');
-      buffer = parts.pop(); // leave the partial tail in buffer
+      // split on both CRLF or LF boundaries
+      const parts = buffer.split(/\r?\n\r?\n/);
+      buffer = parts.pop();  // incomplete tail
 
       for (const block of parts) {
-        const lines = block.split('\n');
-        let eventType = 'message';
-        let rawData   = '';
-
-        for (const line of lines) {
+        let eventType = 'message', rawData = '';
+        block.split(/\r?\n/).forEach(line => {
           if (line.startsWith('event: ')) {
             eventType = line.slice(7).trim();
-          }
-          else if (line.startsWith('data: ')) {
+          } else if (line.startsWith('data: ')) {
             rawData += line.slice(6) + '\n';
           }
-        }
+        });
 
         rawData = rawData.trim();
-        if (rawData === '[DONE]') {
-          removeTyping();
-          return;
-        }
+        if (rawData === '[DONE]') return removeTyping();
 
-        // Try to parse JSON; if that fails, treat it as a plain-text chunk
         let data;
-        try {
-          data = JSON.parse(rawData);
-        } catch (err) {
-          data = { answer: rawData };
-        }
+        try { data = JSON.parse(rawData); }
+        catch { data = { answer: rawData }; }
 
         handleEvent(eventType, data);
       }
