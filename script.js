@@ -135,7 +135,7 @@ function showError(message) {
 async function streamChat(requestBody) {
   const res = await fetch(chatEndpoint, {
     method: 'POST',
-    headers: { 'Content-Type': 'application/json' },
+    headers: {'Content-Type':'application/json'},
     body: JSON.stringify(requestBody)
   });
   if (!res.ok) {
@@ -144,99 +144,98 @@ async function streamChat(requestBody) {
   }
 
   const reader = res.body.getReader();
-  const decoder = new TextDecoder();
-  let buffer = '',
-      currentAnswer = '',
-      streamingDiv = null;
+  const dec    = new TextDecoder();
+  let buffer = '', currentAnswer = '', streamingDiv = null;
+
+  // Helper to dispatch each logical SSE event:
+  function handleEvent(type, data) {
+    if (type === 'stream' && data.answer != null) {
+      // first token: remove typing indicator & create bubble
+      if (!streamingDiv) {
+        removeTyping();
+        streamingDiv = document.createElement('div');
+        streamingDiv.className = 'message bot';
+        elements.chatHistory.appendChild(streamingDiv);
+      }
+      currentAnswer += data.answer;
+      streamingDiv.innerHTML = DOMPurify.sanitize(marked.parse(currentAnswer));
+      scrollToBottom();
+    }
+    else if (type === 'lookup_answer' && data.answer) {
+      // final answer + sources
+      if (streamingDiv) {
+        streamingDiv.innerHTML = DOMPurify.sanitize(marked.parse(data.answer));
+        if (data.sources?.length) {
+          const srcDiv = document.createElement('div');
+          srcDiv.className = 'sources';
+          srcDiv.innerHTML = '<h4>📚 Sources:</h4>' +
+            data.sources.map(s => `<div><a href="${s.url}" target="_blank">${s.title}</a></div>`).join('');
+          streamingDiv.appendChild(srcDiv);
+        }
+      } else {
+        appendMessage(data.answer, 'bot', data.sources);
+      }
+      chatTranscript.push({ sender:'bot', content:data.answer, timestamp:new Date().toISOString(), ...(data.sources && {sources:data.sources}) });
+      scrollToBottom();
+    }
+    else if (type === 'answer' && data.answer) {
+      appendMessage(data.answer, 'bot');
+    }
+    else if (type === 'is_resolved_question' && data.answer) {
+      appendMessage(data.answer, 'bot');
+      if (data.options) {
+        const optDiv = document.createElement('div');
+        optDiv.className = 'message bot';
+        optDiv.innerHTML = `
+          <div style="display:flex;gap:10px;margin-top:10px;">
+            <button onclick="sendQuickReply('${data.options.yes}')">${data.options.yes}</button>
+            <button onclick="sendQuickReply('${data.options.no}')">${data.options.no}</button>
+          </div>`;
+        elements.chatHistory.appendChild(optDiv);
+        scrollToBottom();
+      }
+    }
+  }
 
   try {
     while (true) {
       const { value, done } = await reader.read();
       if (done) break;
-      buffer += decoder.decode(value, { stream: true });
+      buffer += dec.decode(value, {stream:true});
 
-      // split on lines, keep last partial line
-      const lines = buffer.split('\n');
-      buffer = lines.pop() || '';
+      // split off complete events; leave partial in buffer
+      const parts = buffer.split('\n\n');
+      buffer = parts.pop();
 
-      // persist these across each event
-      let eventType = 'message';
-      let dataObj = null;
+      for (const block of parts) {
+        const lines = block.split('\n');
+        let eventType = 'message';
+        let rawData = '';
 
-      for (const line of lines) {
-        if (!line.trim()) continue;
-        if (line.startsWith('event: ')) {
-          eventType = line.slice(7).trim();
-          continue;
-        }
-        if (line.startsWith('data: ')) {
-          const jsonStr = line.slice(6).trim();
-          if (jsonStr === '[DONE]') return;
-          try {
-            dataObj = JSON.parse(jsonStr);
-          } catch {
-            console.warn('Invalid SSE JSON:', jsonStr);
-            continue;
+        for (const line of lines) {
+          if (line.startsWith('event: ')) {
+            eventType = line.slice(7).trim();
           }
-
-          // STREAMING TOKENS
-          if (eventType === 'stream' && dataObj.answer) {
-            currentAnswer += dataObj.answer;
-            if (!streamingDiv) {
-              removeTyping();
-              streamingDiv = document.createElement('div');
-              streamingDiv.className = 'message bot';
-              elements.chatHistory.appendChild(streamingDiv);
-            }
-            streamingDiv.innerHTML = DOMPurify.sanitize(marked.parse(currentAnswer));
-            scrollToBottom();
-          }
-          // FINAL LOOKUP_ANSWER
-          else if (eventType === 'lookup_answer' && dataObj.answer) {
-            if (streamingDiv) {
-              streamingDiv.innerHTML = DOMPurify.sanitize(marked.parse(dataObj.answer));
-              if (dataObj.sources?.length) {
-                const srcDiv = document.createElement('div');
-                srcDiv.className = 'sources';
-                srcDiv.innerHTML = '<h4>📚 Sources:</h4>' +
-                  dataObj.sources.map(s => `<div><a href="${s.url}" target="_blank">${s.title}</a></div>`).join('');
-                streamingDiv.appendChild(srcDiv);
-              }
-            } else {
-              appendMessage(dataObj.answer, 'bot', dataObj.sources);
-            }
-            chatTranscript.push({
-              sender: 'bot',
-              content: dataObj.answer,
-              timestamp: new Date().toISOString(),
-              ...(dataObj.sources && { sources: dataObj.sources })
-            });
-            scrollToBottom();
-          }
-          // SIMPLE ANSWER
-          else if (eventType === 'answer' && dataObj.answer) {
-            appendMessage(dataObj.answer, 'bot');
-          }
-          // FOLLOW-UP RATING
-          else if (eventType === 'is_resolved_question' && dataObj.answer) {
-            appendMessage(dataObj.answer, 'bot');
-            if (dataObj.options) {
-              const optDiv = document.createElement('div');
-              optDiv.className = 'message bot';
-              optDiv.innerHTML = `
-                <div style="display:flex;gap:10px;margin-top:10px;">
-                  <button onclick="sendQuickReply('${dataObj.options.yes}')" style="padding:8px 16px;background:#0078d4;color:white;border:none;border-radius:20px;cursor:pointer;">
-                    ${dataObj.options.yes}
-                  </button>
-                  <button onclick="sendQuickReply('${dataObj.options.no}')" style="padding:8px 16px;background:#f1f1f1;border:none;border-radius:20px;cursor:pointer;">
-                    ${dataObj.options.no}
-                  </button>
-                </div>`;
-              elements.chatHistory.appendChild(optDiv);
-              scrollToBottom();
-            }
+          else if (line.startsWith('data: ')) {
+            rawData += line.slice(6) + '\n';
           }
         }
+
+        rawData = rawData.trim();
+        if (rawData === '[DONE]') {
+          removeTyping();
+          return;
+        }
+
+        // try JSON, fallback to plain-text answer
+        let data;
+        try {
+          data = JSON.parse(rawData);
+        } catch {
+          data = { answer: rawData };
+        }
+
+        handleEvent(eventType, data);
       }
     }
   } finally {
@@ -245,12 +244,6 @@ async function streamChat(requestBody) {
     updateSendButton();
   }
 }
-
-// Quick‐reply helper
-window.sendQuickReply = function(text) {
-  elements.chatInput.value = text;
-  elements.chatForm.dispatchEvent(new Event('submit'));
-};
 
 // Image file handling (validateFile, addSelectedFile, etc.)
 // ... (unchanged, same as before) ...
