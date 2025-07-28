@@ -109,7 +109,7 @@ function showTyping() {
   const t = document.createElement('div');
   t.id = 'typing-indicator';
   t.className = 'typing';
-  t.textContent = '🤖 Agent is thinking...';
+  t.textContent = '🤖 Agent is Responding...';
   elements.chatHistory.appendChild(t);
   scrollToBottom();
 }
@@ -149,40 +149,38 @@ async function streamChat(requestBody) {
   let currentAnswer = '';
   let streamingDiv  = null;
 
+  // Dispatch each complete SSE event
   function handleEvent(type, data) {
-    // treat both "stream" and the default "message" as tokens
+    // 1) for both 'stream' and default 'message' events,
+    //    append plain text into a <pre>
     if ((type === 'stream' || type === 'message') && data.answer != null) {
       if (!streamingDiv) {
         removeTyping();
         streamingDiv = document.createElement('div');
         streamingDiv.className = 'message bot';
+        // create a <pre> to hold the live text
+        const pre = document.createElement('pre');
+        streamingDiv.appendChild(pre);
         elements.chatHistory.appendChild(streamingDiv);
       }
+      // accumulate and show
       currentAnswer += data.answer;
-      streamingDiv.innerHTML = DOMPurify.sanitize(
-        marked.parse(currentAnswer)
-      );
+      const pre = streamingDiv.querySelector('pre');
+      pre.textContent = currentAnswer;
       scrollToBottom();
     }
+    // 2) once we get the final lookup_answer, render as before
     else if (type === 'lookup_answer' && data.answer) {
-      // final answer + sources
+      // replace the <pre> with full rendered Markdown+sources
       if (streamingDiv) {
-        streamingDiv.innerHTML = DOMPurify.sanitize(
-          marked.parse(data.answer)
-        );
+        streamingDiv.innerHTML = DOMPurify.sanitize(marked.parse(data.answer));
         if (data.sources?.length) {
           const srcDiv = document.createElement('div');
           srcDiv.className = 'sources';
-          // dedupe by URL just in case
-          const seen = new Set();
           srcDiv.innerHTML = '<h4>📚 Sources:</h4>' +
-            data.sources.filter(s => {
-              if (seen.has(s.url)) return false;
-              seen.add(s.url);
-              return true;
-            })
-            .map(s => `<div><a href="${s.url}" target="_blank">${s.title}</a></div>`)
-            .join('');
+            data.sources.map(s => 
+              `<div><a href="${s.url}" target="_blank">${s.title}</a></div>`
+            ).join('');
           streamingDiv.appendChild(srcDiv);
         }
       } else {
@@ -196,15 +194,20 @@ async function streamChat(requestBody) {
       });
       scrollToBottom();
     }
+    // 3) follow-up / rating
     else if (type === 'is_resolved_question' && data.answer) {
       appendMessage(data.answer, 'bot');
       if (data.options) {
         const optDiv = document.createElement('div');
         optDiv.className = 'message bot';
         optDiv.innerHTML = `
-          <div style="display:flex; gap:10px; margin-top:10px;">
-            <button onclick="sendQuickReply('${data.options.yes}')">${data.options.yes}</button>
-            <button onclick="sendQuickReply('${data.options.no}')">${data.options.no}</button>
+          <div style="display:flex;gap:10px;margin-top:10px;">
+            <button onclick="sendQuickReply('${data.options.yes}')">
+              ${data.options.yes}
+            </button>
+            <button onclick="sendQuickReply('${data.options.no}')">
+              ${data.options.no}
+            </button>
           </div>`;
         elements.chatHistory.appendChild(optDiv);
         scrollToBottom();
@@ -218,20 +221,18 @@ async function streamChat(requestBody) {
       if (done) break;
       buffer += dec.decode(value, { stream: true });
 
-      // split on either CRLF or LF double‐newline
+      // split on CRLF or LF double‐newline
       const parts = buffer.split(/\r?\n\r?\n/);
-      buffer = parts.pop(); 
+      buffer = parts.pop();  // incomplete chunk
 
       for (const block of parts) {
         let eventType = 'message';
-        let rawData = '';
+        let rawData   = '';
 
-        // collect all lines in this SSE block
         block.split(/\r?\n/).forEach(line => {
           if (line.startsWith('event: ')) {
             eventType = line.slice(7).trim();
-          }
-          else if (line.startsWith('data: ')) {
+          } else if (line.startsWith('data: ')) {
             rawData += line.slice(6) + '\n';
           }
         });
@@ -242,14 +243,11 @@ async function streamChat(requestBody) {
           return;
         }
 
-        // only JSON.parse if it really looks like JSON
+        // build a data object: if it's JSON, parse it; else treat as text
         let data;
         if (/^[\{\[]/.test(rawData)) {
           try { data = JSON.parse(rawData); }
-          catch (err) {
-            // fallback to treating it as text
-            data = { answer: rawData };
-          }
+          catch { data = { answer: rawData }; }
         } else {
           data = { answer: rawData };
         }

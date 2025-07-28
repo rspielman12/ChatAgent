@@ -201,3 +201,10 @@ header h2 { margin: 0; font-size: 1.2em; }
   .input-container { order: 2; }
   .send-btn { order: 3; align-self: stretch; }
 }
+/* Make bot messages that contain a <pre> preserve whitespace & wrap */
+.message.bot pre {
+  margin: 0;
+  white-space: pre-wrap;    /* preserve newlines, wrap long lines */
+  font-family: inherit;     /* match the chat font */
+  font-size: 1em;
+}
