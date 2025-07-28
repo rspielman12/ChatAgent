@@ -135,21 +135,81 @@ function showError(message) {
 async function streamChat(requestBody) {
   const res = await fetch(chatEndpoint, {
     method: 'POST',
-    headers: {
-      'Content-Type': 'application/json',
-      'Accept': 'text/event-stream',       // ← ask explicitly for SSE
-    },
-    body: JSON.stringify(requestBody)
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify(requestBody),
   });
-  if (!res.ok) throw new Error(await res.text());
+  if (!res.ok) {
+    const err = await res.text();
+    throw new Error(`Request failed (${res.status}): ${err}`);
+  }
 
   const reader = res.body.getReader();
   const dec    = new TextDecoder();
-  let buffer = '', currentAnswer = '', streamingDiv = null;
+  let buffer        = '';
+  let currentAnswer = '';
+  let streamingDiv  = null;
 
   function handleEvent(type, data) {
-    console.log('🔔 SSE event:', type, data);
-    // … your existing switch/if branches …
+    // treat both "stream" and the default "message" as tokens
+    if ((type === 'stream' || type === 'message') && data.answer != null) {
+      if (!streamingDiv) {
+        removeTyping();
+        streamingDiv = document.createElement('div');
+        streamingDiv.className = 'message bot';
+        elements.chatHistory.appendChild(streamingDiv);
+      }
+      currentAnswer += data.answer;
+      streamingDiv.innerHTML = DOMPurify.sanitize(
+        marked.parse(currentAnswer)
+      );
+      scrollToBottom();
+    }
+    else if (type === 'lookup_answer' && data.answer) {
+      // final answer + sources
+      if (streamingDiv) {
+        streamingDiv.innerHTML = DOMPurify.sanitize(
+          marked.parse(data.answer)
+        );
+        if (data.sources?.length) {
+          const srcDiv = document.createElement('div');
+          srcDiv.className = 'sources';
+          // dedupe by URL just in case
+          const seen = new Set();
+          srcDiv.innerHTML = '<h4>📚 Sources:</h4>' +
+            data.sources.filter(s => {
+              if (seen.has(s.url)) return false;
+              seen.add(s.url);
+              return true;
+            })
+            .map(s => `<div><a href="${s.url}" target="_blank">${s.title}</a></div>`)
+            .join('');
+          streamingDiv.appendChild(srcDiv);
+        }
+      } else {
+        appendMessage(data.answer, 'bot', data.sources);
+      }
+      chatTranscript.push({
+        sender: 'bot',
+        content: data.answer,
+        timestamp: new Date().toISOString(),
+        ...(data.sources && { sources: data.sources })
+      });
+      scrollToBottom();
+    }
+    else if (type === 'is_resolved_question' && data.answer) {
+      appendMessage(data.answer, 'bot');
+      if (data.options) {
+        const optDiv = document.createElement('div');
+        optDiv.className = 'message bot';
+        optDiv.innerHTML = `
+          <div style="display:flex; gap:10px; margin-top:10px;">
+            <button onclick="sendQuickReply('${data.options.yes}')">${data.options.yes}</button>
+            <button onclick="sendQuickReply('${data.options.no}')">${data.options.no}</button>
+          </div>`;
+        elements.chatHistory.appendChild(optDiv);
+        scrollToBottom();
+      }
+    }
   }
 
   try {
@@ -158,26 +218,41 @@ async function streamChat(requestBody) {
       if (done) break;
       buffer += dec.decode(value, { stream: true });
 
-      // split on both CRLF or LF boundaries
+      // split on either CRLF or LF double‐newline
       const parts = buffer.split(/\r?\n\r?\n/);
-      buffer = parts.pop();  // incomplete tail
+      buffer = parts.pop(); 
 
       for (const block of parts) {
-        let eventType = 'message', rawData = '';
+        let eventType = 'message';
+        let rawData = '';
+
+        // collect all lines in this SSE block
         block.split(/\r?\n/).forEach(line => {
           if (line.startsWith('event: ')) {
             eventType = line.slice(7).trim();
-          } else if (line.startsWith('data: ')) {
+          }
+          else if (line.startsWith('data: ')) {
             rawData += line.slice(6) + '\n';
           }
         });
 
         rawData = rawData.trim();
-        if (rawData === '[DONE]') return removeTyping();
+        if (rawData === '[DONE]') {
+          removeTyping();
+          return;
+        }
 
+        // only JSON.parse if it really looks like JSON
         let data;
-        try { data = JSON.parse(rawData); }
-        catch { data = { answer: rawData }; }
+        if (/^[\{\[]/.test(rawData)) {
+          try { data = JSON.parse(rawData); }
+          catch (err) {
+            // fallback to treating it as text
+            data = { answer: rawData };
+          }
+        } else {
+          data = { answer: rawData };
+        }
 
         handleEvent(eventType, data);
       }
@@ -188,6 +263,7 @@ async function streamChat(requestBody) {
     updateSendButton();
   }
 }
+
 
 
 // Image file handling (validateFile, addSelectedFile, etc.)
