@@ -147,73 +147,6 @@ async function streamChat(requestBody) {
   const dec    = new TextDecoder();
   let buffer        = '';
   let currentAnswer = '';
-  let streamingDiv  = null;
-
-  // Dispatch each complete SSE event
-  function handleEvent(type, data) {
-    // 1) for both 'stream' and default 'message' events,
-    //    append plain text into a <pre>
-    if ((type === 'stream' || type === 'message') && data.answer != null) {
-      if (!streamingDiv) {
-        removeTyping();
-        streamingDiv = document.createElement('div');
-        streamingDiv.className = 'message bot';
-        // create a <pre> to hold the live text
-        const pre = document.createElement('pre');
-        streamingDiv.appendChild(pre);
-        elements.chatHistory.appendChild(streamingDiv);
-      }
-      // accumulate and show
-      currentAnswer += data.answer;
-      const pre = streamingDiv.querySelector('pre');
-      pre.textContent = currentAnswer;
-      scrollToBottom();
-    }
-    // 2) once we get the final lookup_answer, render as before
-    else if (type === 'lookup_answer' && data.answer) {
-      // replace the <pre> with full rendered Markdown+sources
-      if (streamingDiv) {
-        streamingDiv.innerHTML = DOMPurify.sanitize(marked.parse(data.answer));
-        if (data.sources?.length) {
-          const srcDiv = document.createElement('div');
-          srcDiv.className = 'sources';
-          srcDiv.innerHTML = '<h4>📚 Sources:</h4>' +
-            data.sources.map(s => 
-              `<div><a href="${s.url}" target="_blank">${s.title}</a></div>`
-            ).join('');
-          streamingDiv.appendChild(srcDiv);
-        }
-      } else {
-        appendMessage(data.answer, 'bot', data.sources);
-      }
-      chatTranscript.push({
-        sender: 'bot',
-        content: data.answer,
-        timestamp: new Date().toISOString(),
-        ...(data.sources && { sources: data.sources })
-      });
-      scrollToBottom();
-    }
-    // 3) follow-up / rating
-    else if (type === 'is_resolved_question' && data.answer) {
-      appendMessage(data.answer, 'bot');
-      if (data.options) {
-        const optDiv = document.createElement('div');
-        optDiv.className = 'message bot';
-        optDiv.innerHTML = `
-          <div style="display:flex;gap:10px;margin-top:10px;">
-            <button onclick="sendQuickReply('${data.options.yes}')">
-              ${data.options.yes}
-            </button>
-            <button onclick="sendQuickReply('${data.options.no}')">
-              ${data.options.no}
-            </button>
-          </div>`;
-        elements.chatHistory.appendChild(optDiv);
-        scrollToBottom();
-      }
-    }
-  }
 
   try {
     while (true) {
@@ -223,12 +156,12 @@ async function streamChat(requestBody) {
 
       // split on CRLF or LF double‐newline
       const parts = buffer.split(/\r?\n\r?\n/);
-      buffer = parts.pop();  // incomplete chunk
+      buffer = parts.pop();  // leave any partial event in buffer
 
       for (const block of parts) {
+        // parse eventType & data lines
         let eventType = 'message';
         let rawData   = '';
-
         block.split(/\r?\n/).forEach(line => {
           if (line.startsWith('event: ')) {
             eventType = line.slice(7).trim();
@@ -243,7 +176,7 @@ async function streamChat(requestBody) {
           return;
         }
 
-        // build a data object: if it's JSON, parse it; else treat as text
+        // build a data object
         let data;
         if (/^[\{\[]/.test(rawData)) {
           try { data = JSON.parse(rawData); }
@@ -252,7 +185,53 @@ async function streamChat(requestBody) {
           data = { answer: rawData };
         }
 
-        handleEvent(eventType, data);
+        // — ignore streaming tokens (just accumulate) —
+        if (eventType === 'stream' || eventType === 'message') {
+          currentAnswer += data.answer || '';
+          continue;
+        }
+
+        // — final lookup_answer: render only here —
+        if (eventType === 'lookup_answer' && data.answer) {
+          removeTyping();
+          // dedupe sources by URL
+          let uniqueSources = [];
+          if (Array.isArray(data.sources)) {
+            const seen = new Set();
+            for (const s of data.sources) {
+              if (!seen.has(s.url)) {
+                seen.add(s.url);
+                uniqueSources.push(s);
+              }
+            }
+          }
+          // append the full answer + deduped sources
+          appendMessage(data.answer, 'bot', uniqueSources);
+          chatTranscript.push({
+            sender: 'bot',
+            content: data.answer,
+            timestamp: new Date().toISOString(),
+            ...(uniqueSources.length && { sources: uniqueSources })
+          });
+          scrollToBottom();
+          continue;
+        }
+
+        // — follow-up rating question —
+        if (eventType === 'is_resolved_question' && data.answer) {
+          appendMessage(data.answer, 'bot');
+          if (data.options) {
+            const optDiv = document.createElement('div');
+            optDiv.className = 'message bot';
+            optDiv.innerHTML = `
+              <div style="display:flex;gap:10px;margin-top:10px;">
+                <button onclick="sendQuickReply('${data.options.yes}')">${data.options.yes}</button>
+                <button onclick="sendQuickReply('${data.options.no}')">${data.options.no}</button>
+              </div>`;
+            elements.chatHistory.appendChild(optDiv);
+            scrollToBottom();
+          }
+        }
       }
     }
   } finally {
