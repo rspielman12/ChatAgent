@@ -208,3 +208,20 @@ header h2 { margin: 0; font-size: 1.2em; }
   font-family: inherit;     /* match the chat font */
   font-size: 1em;
 }
+.create-case-btn {
+  margin-top: 10px;
+  padding: 12px 24px;
+  background: #28a745;
+  color: white;
+  border: none;
+  border-radius: 25px;
+  cursor: pointer;
+  font-size: 16px;
+  transition: background 0.2s;
+}
+.create-case-btn:hover {
+  background: #218838;
+}
+#create-case-btn {
+  display: none;
+}

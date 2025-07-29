@@ -25,6 +25,7 @@ const elements = {
   imageInput: document.getElementById('image-input'),
   imagePreview: document.getElementById('image-preview'),
   attachBtn: document.getElementById('attach-btn'),
+  createCaseBtn: document.getElementById('create-case-btn'),
 };
 
 function getOrCreateConversationId() {
@@ -54,6 +55,8 @@ function resetConversation() {
   chatTranscript = [];
   clearSelectedFiles();
   appendMessage("Hello! How can I help you today?", 'bot');
+  elements.createCaseBtn.style.display = 'none';
+  window.lastFeedbackWasNegative = false;
 }
 
 function appendMessage(content, sender = 'bot', sources = null) {
@@ -217,9 +220,22 @@ async function streamChat(requestBody) {
     updateSendButton();
   }
 }
+
+
 // ===== end streamChat =====
 
 window.sendQuickReply = text => {
+  const lowerText = text.trim().toLowerCase();
+
+  if (lowerText.includes('no')) {
+    console.log('🛑 User clicked a negative feedback option');
+    window.lastFeedbackWasNegative = true;
+    elements.createCaseBtn.style.display = 'inline-block';
+  } else {
+    window.lastFeedbackWasNegative = false;
+    elements.createCaseBtn.style.display = 'none';
+  }
+
   elements.chatInput.value = text;
   elements.chatForm.dispatchEvent(new Event('submit'));
 };
@@ -360,4 +376,25 @@ updateSendButton();
 appendMessage("👋 Hello! I'm here to help you with your questions. What would you like to know?", 'bot');
 window.addEventListener('beforeunload', () => {
   selectedFiles.forEach(f => URL.revokeObjectURL(f.url));
+});
+
+elements.createCaseBtn = document.getElementById('create-case-btn');
+
+elements.createCaseBtn.addEventListener('click', () => {
+  const product = elements.productSelect.value.trim();
+
+  if (!product) {
+    alert('Please select a product before creating a case.');
+    return;
+  }
+
+  const description = chatTranscript
+    .map(entry => `${entry.sender.toUpperCase()}: ${entry.content}`)
+    .join('\n\n');
+
+  const encodedDescription = encodeURIComponent(description);
+  const encodedProduct = encodeURIComponent(product);
+
+  const url = `https://form.feathery.io/to/AyTF5V/?Description_1=${encodedDescription}&Product_1=${encodedProduct}`;
+  window.open(url, '_blank');
 });
